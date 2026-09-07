@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Workspace · FileHub</title>
+<meta name="description" content="Proyectos y avances — EGS / FileHub" />
+
+<!-- PWA -->
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#0b1326" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Workspace" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<link rel="icon" href="/icon-192.png" />
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = { theme: { extend: {
+    fontFamily: { headline: ['Hanken Grotesk','sans-serif'], sans: ['Inter','sans-serif'] },
+  }}};
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0/dist/umd/supabase.min.js"></script>
+
+<style>
+  :root { color-scheme: dark; }
+  html,body { margin:0; background:#0b1326; color:#F8FAFC; font-family:Inter,system-ui,sans-serif; -webkit-font-smoothing:antialiased; }
+  .font-headline { font-family:'Hanken Grotesk',Inter,sans-serif; }
+  .fh-card { background:#131b2e; border:1px solid #283449; }
+  .fh-rise { animation: rise .35s ease both; }
+  @keyframes rise { from { opacity:0; transform:translateY(8px);} to {opacity:1;transform:none;} }
+  .spin { animation: sp 1s linear infinite; } @keyframes sp { to { transform:rotate(360deg);} }
+  ::-webkit-scrollbar { width:8px; height:8px; } ::-webkit-scrollbar-thumb { background:#283449; border-radius:8px; }
+  @media (prefers-reduced-motion: reduce) { .fh-rise,.spin { animation:none; } }
+  a { color:inherit; text-decoration:none; }
+  select, input, button { font-family:inherit; }
+</style>
+</head>
+<body>
+<div id="app" class="min-h-screen"></div>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════════
+ *  Workspace · FileHub — webapp standalone, misma sesión de Supabase que el
+ *  espejo de FileHub (mismo origen carlosgalera-a11y.github.io, storageKey
+ *  por defecto sb-igvadjgjpyuvzailjqwg-auth-token). Instalable como PWA.
+ * ════════════════════════════════════════════════════════════════════════ */
+const SUPA_URL = 'https://igvadjgjpyuvzailjqwg.supabase.co';
+const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlndmFkamdqcHl1dnphaWxqcXdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NDI3MTAsImV4cCI6MjA4ODAxODcxMH0.eAqKCHDzrkvMTseaBP0I_JICP1owX60-cp3agYqRz4Q';
+const DEFAULT_REPO = 'carlosgalera-a11y/filehub2026';
+
+const sb = window.supabase.createClient(SUPA_URL, SUPA_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true },
+});
+
+const $app = document.getElementById('app');
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const MONTHS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+const DAYS = ['L','M','X','J','V','S','D'];
+const pad = (n) => String(n).padStart(2,'0');
+
+const state = {
+  user: null,
+  projects: [], tasks: [], events: [], files: [], updates: [],
+  section: 'overview', selectedProject: null,
+  gh: null, ghLoading: false, ghTab: 'commits',
+  cal: { m: new Date().getMonth(), y: new Date().getFullYear() },
+  sidebar: false,
+  savingNote: false,
+};
+
+/* ── helpers ── */
+function relTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso).getTime(); if (isNaN(d)) return '';
+  const diff = Date.now() - d, day = 86400000;
+  if (diff < 3600000) return Math.max(1, Math.round(diff/60000)) + ' min';
+  if (diff < day) return Math.round(diff/3600000) + ' h';
+  if (diff < 30*day) return Math.round(diff/day) + ' d';
+  return new Date(iso).toLocaleDateString('es-ES', { day:'numeric', month:'short' });
+}
+const STATUS = { active:['Activo','bg-[#4edea3]/20 text-[#4edea3]'], completed:['Completado','bg-[#8083ff]/20 text-[#c0c1ff]'], 'on-hold':['En pausa','bg-[#F59E0B]/20 text-[#F59E0B]'] };
+const PRIO = { urgent:'text-[#EF4444]', high:'text-[#F59E0B]', medium:'text-[#8083ff]', low:'text-[#64748b]' };
+const KIND = { nota:['Nota','bg-[#8083ff]/15 text-[#c0c1ff]'], hito:['Hito','bg-[#4edea3]/15 text-[#4edea3]'], bloqueo:['Bloqueo','bg-[#EF4444]/15 text-[#EF4444]'] };
+
+function currentRepo() {
+  const p = state.projects.find(x => x.id === state.selectedProject);
+  return (p && p.github_repo) || DEFAULT_REPO;
+}
+function filteredTasks() {
+  return state.selectedProject ? state.tasks.filter(t => t.category === state.selectedProject) : state.tasks;
+}
+function filteredFiles() {
+  if (!state.selectedProject) return state.files;
+  const p = state.projects.find(x => x.id === state.selectedProject);
+  if (!p) return state.files;
+  return state.files.filter(f => (f.folder||'').toLowerCase().includes((p.name||'').toLowerCase()));
+}
+function filteredUpdates() {
+  return state.selectedProject ? state.updates.filter(u => u.project_id === state.selectedProject) : state.updates;
+}
+
+/* ── data ── */
+async function loadAll() {
+  const uid = state.user.id;
+  const [pr, tk, ev, fi, up] = await Promise.all([
+    sb.from('projects').select('*').eq('user_id', uid).order('created_at', { ascending:false }),
+    sb.from('tasks').select('*').eq('user_id', uid).order('created_at', { ascending:false }).limit(200),
+    sb.from('calendar_events').select('*').eq('user_id', uid).limit(300),
+    sb.from('files').select('*').eq('user_id', uid).order('created_at', { ascending:false }).limit(300),
+    sb.from('project_updates').select('*').eq('user_id', uid).order('created_at', { ascending:false }).limit(80),
+  ]);
+  state.projects = pr.data || [];
+  state.tasks = (tk.data || []).map(t => ({ ...t, dueDate: t.due_date }));
+  state.events = (ev.data || []).map(e => ({ id:e.id, title:e.title, date:(e.start_date||'').slice(0,10) }));
+  state.files = fi.data || [];
+  state.updates = up.data || [];
+}
+
+async function loadGithub() {
+  state.ghLoading = true; render();
+  try {
+    const { data, error } = await sb.functions.invoke('github-proxy', { body:{ action:'summary', repo: currentRepo(), limit: 10 } });
+    if (error) {
+      let detail = error.message || 'error';
+      try { const j = await error.context.json(); detail = j.hint || j.detail || j.error || detail; } catch(_){}
+      state.gh = { error: detail, commits:[], prs:[], issues:[], counts:{} };
+    } else if (data && data.error) {
+      state.gh = { error: data.hint || data.detail || data.error, commits:[], prs:[], issues:[], counts:{} };
+    } else {
+      state.gh = data;
+    }
+  } catch (e) {
+    state.gh = { error: String(e && e.message || e), commits:[], prs:[], issues:[], counts:{} };
+  }
+  state.ghLoading = false; render();
+}
+
+async function addNote() {
+  const inp = document.getElementById('note-input');
+  const sel = document.getElementById('note-kind');
+  const note = (inp && inp.value || '').trim();
+  if (!note) return;
+  const kind = sel ? sel.value : 'nota';
+  const row = {
+    id: 'upd-' + Date.now() + '-' + Math.random().toString(36).slice(2,8),
+    user_id: state.user.id,
+    project_id: state.selectedProject || 'general',
+    note, kind, progress: null, created_at: new Date().toISOString(),
+  };
+  state.updates.unshift(row);
+  render();
+  try { await sb.from('project_updates').insert(row); } catch(_){}
+}
+
+async function toggleTask(id) {
+  const t = state.tasks.find(x => x.id === id); if (!t) return;
+  t.completed = !t.completed; render();
+  try { await sb.from('tasks').update({ completed: t.completed }).eq('id', id); } catch(_){}
+}
+
+async function addTask() {
+  const inp = document.getElementById('task-input');
+  const title = (inp && inp.value || '').trim(); if (!title) return;
+  const row = {
+    id: 'task-' + Date.now() + '-' + Math.random().toString(36).slice(2,8),
+    user_id: state.user.id, title, completed: false,
+    category: state.selectedProject || 'general', priority: 'medium',
+    due_date: null, is_recurring: false, created_at: new Date().toISOString(),
+  };
+  state.tasks.unshift({ ...row, dueDate: null });
+  render();
+  try { await sb.from('tasks').insert(row); } catch(_){}
+}
+
+async function updateProject(id, patch) {
+  const p = state.projects.find(x => x.id === id); if (!p) return;
+  Object.assign(p, patch); render();
+  try { await sb.from('projects').update(patch).eq('id', id); } catch(_){}
+}
+
+/* ══ render ══ */
+function render() {
+  if (!state.user) return;
+  $app.innerHTML = `
+    <div class="flex min-h-screen">
+      ${sidebar()}
+      <div class="flex-1 min-w-0 flex flex-col">
+        ${topbar()}
+        <main class="flex-1 p-4 md:p-6 overflow-auto">${mainContent()}</main>
+      </div>
+    </div>
+    ${state.sidebar ? `<div data-act="close-sidebar" class="md:hidden fixed inset-0 bg-black/50 z-30"></div>` : ''}
+  `;
+}
+
+function sidebar() {
+  const projItem = (p) => `
+    <button data-act="proj" data-id="${esc(p.id)}" class="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm mt-0.5 transition-colors ${state.selectedProject===p.id?'bg-[#4edea3]/15 text-[#4edea3]':'text-[#94A3B8] hover:bg-[#1c2436]'}">
+      <span class="w-2.5 h-2.5 rounded-full ${p.status==='active'?'bg-[#4edea3]':'bg-[#64748b]'}"></span>
+      <span class="truncate">${esc(p.name)}</span>
+    </button>`;
+  const pending = state.tasks.filter(t=>!t.completed).length;
+  const spaceItem = (id,label,icon,badge) => `
+    <button data-act="sec" data-id="${id}" class="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm mt-0.5 transition-colors ${state.section===id?'bg-[#8083ff]/15 text-[#c0c1ff]':'text-[#94A3B8] hover:bg-[#1c2436]'}">
+      <span class="w-4 text-center">${icon}</span><span class="flex-1 text-left">${label}</span>
+      ${badge?`<span class="text-[10px] bg-[#8083ff]/25 text-[#c0c1ff] px-1.5 rounded-full">${badge}</span>`:''}
+    </button>`;
+  return `
+  <aside class="${state.sidebar?'translate-x-0':'-translate-x-full'} md:translate-x-0 fixed md:static z-40 w-64 shrink-0 h-screen md:h-auto md:min-h-screen bg-[#0d1528] border-r border-[#283449] transition-transform overflow-y-auto">
+    <div class="p-4">
+      <div class="flex items-center gap-2.5 mb-6">
+        <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background:linear-gradient(135deg,#8083ff,#4edea3)">💼</div>
+        <div><h1 class="font-headline text-sm font-bold leading-none">Workspace</h1><p class="text-[10px] text-[#64748b] mt-0.5">Proyectos &amp; avances</p></div>
+      </div>
+      <div class="mb-5">
+        <p class="text-[10px] font-semibold text-[#64748b] uppercase tracking-wider mb-2 px-2">Proyectos</p>
+        <button data-act="proj" data-id="" class="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm transition-colors ${!state.selectedProject?'bg-[#8083ff]/15 text-[#c0c1ff]':'text-[#94A3B8] hover:bg-[#1c2436]'}">
+          <span class="w-4 text-center">🗂️</span><span>Todos los proyectos</span></button>
+        ${state.projects.map(projItem).join('')}
+      </div>
+      <div class="mb-5">
+        <p class="text-[10px] font-semibold text-[#64748b] uppercase tracking-wider mb-2 px-2">Espacio</p>
+        ${spaceItem('overview','Panel general','📊',0)}
+        ${spaceItem('avances','Avances','🌿',0)}
+        ${spaceItem('calendario','Calendario','🗓️',0)}
+        ${spaceItem('tareas','Tareas','✅',pending)}
+        ${spaceItem('archivos','Archivos','📁',0)}
+      </div>
+      <div class="mb-5">
+        <p class="text-[10px] font-semibold text-[#64748b] uppercase tracking-wider mb-2 px-2">Canales</p>
+        ${['egs-tek','egs-tek-beta','general'].map(c=>`<a href="../#dashboard" class="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-[#94A3B8] hover:bg-[#1c2436] transition-colors mt-0.5"><span class="text-[#64748b]">#</span><span>${c}</span></a>`).join('')}
+      </div>
+      <div class="mt-6 flex items-center gap-2 px-2 py-2 rounded-lg bg-[#131b2e] border border-[#283449]">
+        <div class="w-7 h-7 rounded-full bg-[#8083ff]/25 flex items-center justify-center text-xs">👤</div>
+        <span class="text-xs text-[#94A3B8] truncate flex-1">${esc(state.user.email||'Carlos')}</span>
+        <button data-act="logout" title="Salir" class="text-[#64748b] hover:text-[#EF4444]">⎋</button>
+      </div>
+    </div>
+  </aside>`;
+}
+
+function topbar() {
+  const label = { overview:'Panel general', avances:'Avances', calendario:'Calendario', tareas:'Tareas', archivos:'Archivos' }[state.section];
+  const proj = state.selectedProject ? state.projects.find(p=>p.id===state.selectedProject) : null;
+  return `
+  <header class="sticky top-0 z-20 backdrop-blur-md bg-[#0b1326]/85 border-b border-[#283449] px-4 md:px-6 py-3 flex items-center gap-3">
+    <button data-act="toggle-sidebar" class="md:hidden text-[#94A3B8] text-xl leading-none">☰</button>
+    <div class="min-w-0">
+      <div class="flex items-center gap-1.5 text-[11px] text-[#64748b]"><span>Workspace</span><span>›</span><span class="text-[#94A3B8]">${proj?esc(proj.name):label}</span></div>
+      <h2 class="font-headline text-lg font-bold leading-tight truncate">${proj?esc(proj.name):label}</h2>
+    </div>
+    ${proj?projMeta(proj):''}
+  </header>`;
+}
+function projMeta(p) {
+  const st = STATUS[p.status||'active']||STATUS.active;
+  return `<div class="hidden sm:flex items-center gap-3 ml-auto">
+    <span class="text-[10px] px-2 py-0.5 rounded-full font-semibold ${st[1]}">${st[0]}</span>
+    ${p.deadline?`<span class="text-[10px] text-[#64748b]">🕒 ${esc(p.deadline)}</span>`:''}
+    ${typeof p.progress==='number'?`<div class="flex items-center gap-2"><div class="w-20 h-1.5 rounded-full bg-[#283449] overflow-hidden"><div class="h-full bg-[#8083ff]" style="width:${Math.max(0,Math.min(100,p.progress))}%"></div></div><span class="text-[10px] text-[#64748b]">${p.progress}%</span></div>`:''}
+  </div>`;
+}
+
+function mainContent() {
+  switch (state.section) {
+    case 'overview': return overview();
+    case 'avances': return avances();
+    case 'calendario': return `<div class="fh-card rounded-2xl p-5 fh-rise">${calendar()}</div>`;
+    case 'tareas': return `<div class="fh-card rounded-2xl p-5 fh-rise">${tareas()}</div>`;
+    case 'archivos': return `<div class="fh-card rounded-2xl p-5 fh-rise">${archivos()}</div>`;
+  }
+  return '';
+}
+
+function overview() {
+  const active = state.projects.filter(p=>p.status==='active').length;
+  const pending = state.tasks.filter(t=>!t.completed).length;
+  const done = state.tasks.filter(t=>t.completed).length;
+  const card = (icon,label,val,color) => `<div class="fh-card rounded-2xl p-4"><div class="flex items-center gap-2 mb-2"><span>${icon}</span><span class="text-xs text-[#94A3B8]">${label}</span></div><p class="text-2xl font-headline font-bold ${color}">${val}</p></div>`;
+  const proj = state.selectedProject ? state.projects.find(p=>p.id===state.selectedProject) : null;
+  return `<div class="space-y-6 fh-rise">
+    ${proj?projEditor(proj):''}
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      ${card('💼','Proyectos activos',active,'text-[#F8FAFC]')}
+      ${card('✅','Tareas pendientes',pending,'text-[#F8FAFC]')}
+      ${card('🎯','Completadas',done,'text-[#F8FAFC]')}
+    </div>
+    <div class="fh-card rounded-2xl p-5">${calendar()}</div>
+    <div class="fh-card rounded-2xl p-5">
+      <h3 class="font-headline font-bold text-sm mb-3">Tareas recientes</h3>
+      <div class="space-y-1.5">
+        ${state.tasks.filter(t=>!t.completed).slice(0,5).map(t=>`
+          <div class="flex items-center gap-2.5 py-1.5 px-2 rounded-lg hover:bg-[#1c2436]">
+            <button data-act="toggle-task" data-id="${esc(t.id)}" class="${PRIO[t.priority||'medium']}">●</button>
+            <span class="text-sm truncate flex-1">${esc(t.title)}</span>
+            ${t.dueDate?`<span class="text-[10px] text-[#64748b]">${esc(String(t.dueDate).slice(5))}</span>`:''}
+          </div>`).join('') || '<p class="text-sm text-[#64748b]">Sin tareas pendientes</p>'}
+      </div>
+    </div>
+  </div>`;
+}
+
+function projEditor(p) {
+  const prog = Math.max(0, Math.min(100, Number(p.progress)||0));
+  return `<div class="fh-card rounded-2xl p-5">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-headline font-bold text-sm">${esc(p.name)}</h3>
+      <select data-act="proj-status" data-id="${esc(p.id)}" class="bg-[#0d1528] border border-[#283449] rounded-lg text-xs text-[#94A3B8] px-2 py-1.5 focus:outline-none focus:border-[#8083ff]">
+        ${['active','on-hold','completed'].map(s=>`<option value="${s}" ${(p.status||'active')===s?'selected':''}>${STATUS[s][0]}</option>`).join('')}
+      </select>
+    </div>
+    <div class="flex items-center gap-3">
+      <span class="text-xs text-[#94A3B8] shrink-0">Progreso</span>
+      <input type="range" min="0" max="100" step="5" value="${prog}" data-act="proj-progress" data-id="${esc(p.id)}" class="flex-1 accent-[#8083ff]" />
+      <span id="prog-label" class="text-sm font-headline font-bold text-[#c0c1ff] w-12 text-right">${prog}%</span>
+    </div>
+  </div>`;
+}
+
+function calendar() {
+  const { m, y } = state.cal;
+  const total = new Date(y, m+1, 0).getDate();
+  const offset = (new Date(y, m, 1).getDay()+6)%7;
+  const today = `${new Date().getFullYear()}-${pad(new Date().getMonth()+1)}-${pad(new Date().getDate())}`;
+  const byDay = {};
+  state.events.forEach(e => { if (e.date) (byDay[e.date] = byDay[e.date]||[]).push(e); });
+  let cells = '';
+  for (let i=0;i<offset;i++) cells += '<div></div>';
+  for (let d=1; d<=total; d++) {
+    const ds = `${y}-${pad(m+1)}-${pad(d)}`;
+    const evs = byDay[ds] || [];
+    const isT = ds===today;
+    cells += `<div class="min-h-[68px] p-1.5 rounded-lg border ${isT?'border-[#8083ff] bg-[#8083ff]/10':'border-[#283449]/50'}">
+      <span class="text-xs font-semibold ${isT?'text-[#8083ff]':'text-[#94A3B8]'}">${d}</span>
+      ${evs.slice(0,2).map(e=>`<div class="mt-0.5 text-[10px] leading-tight truncate px-1 py-0.5 rounded bg-[#4edea3]/15 text-[#4edea3]">${esc(e.title)}</div>`).join('')}
+      ${evs.length>2?`<span class="text-[9px] text-[#64748b]">+${evs.length-2}</span>`:''}
+    </div>`;
+  }
+  return `
+    <div class="flex items-center justify-between mb-4">
+      <button data-act="cal-prev" class="p-1.5 rounded-lg hover:bg-[#1c2436] text-[#94A3B8]">‹</button>
+      <h3 class="font-headline font-bold">${MONTHS[m]} ${y}</h3>
+      <button data-act="cal-next" class="p-1.5 rounded-lg hover:bg-[#1c2436] text-[#94A3B8]">›</button>
+    </div>
+    <div class="grid grid-cols-7 gap-0.5 mb-1">${DAYS.map(d=>`<div class="text-center text-[10px] font-semibold text-[#64748b] py-1">${d}</div>`).join('')}</div>
+    <div class="grid grid-cols-7 gap-1">${cells}</div>`;
+}
+
+function tareas() {
+  const ts = filteredTasks();
+  return `
+    <div class="flex items-center justify-between mb-3"><h3 class="font-headline font-bold">Tareas</h3><span class="text-xs text-[#64748b]">${ts.filter(t=>!t.completed).length} pendientes</span></div>
+    <div class="flex items-center gap-2 mb-4">
+      <input id="task-input" placeholder="${state.selectedProject?'Nueva tarea del proyecto…':'Nueva tarea…'}" class="flex-1 bg-[#0d1528] border border-[#283449] rounded-lg text-sm px-3 py-2 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]" />
+      <button data-act="add-task" class="p-2 rounded-lg bg-[#8083ff] text-white hover:bg-[#6d70e6]">＋</button>
+    </div>
+    <div class="space-y-1.5">
+      ${ts.map(t=>`<div class="flex items-center gap-3 py-2.5 px-3 rounded-xl ${t.completed?'opacity-50':'hover:bg-[#1c2436]'}">
+        <button data-act="toggle-task" data-id="${esc(t.id)}" class="text-lg leading-none ${t.completed?'text-[#4edea3]':PRIO[t.priority||'medium']}">${t.completed?'☑':'○'}</button>
+        <span class="text-sm flex-1 truncate ${t.completed?'line-through text-[#64748b]':''}">${esc(t.title)}</span>
+        ${t.dueDate?`<span class="text-[10px] text-[#64748b]">${esc(String(t.dueDate).slice(5))}</span>`:''}
+      </div>`).join('') || '<p class="text-sm text-[#64748b] text-center py-8">Sin tareas</p>'}
+    </div>`;
+}
+
+function archivos() {
+  const fs = filteredFiles();
+  return `
+    <div class="flex items-center justify-between mb-3"><h3 class="font-headline font-bold">Archivos</h3><span class="text-xs text-[#64748b]">${fs.length} archivos</span></div>
+    <div class="space-y-1.5">
+      ${fs.map(f=>`<a href="${esc(f.url||'#')}" target="_blank" rel="noopener" class="flex items-center gap-3 py-2.5 px-3 rounded-xl hover:bg-[#1c2436]">
+        <span class="w-8 h-8 rounded-lg bg-[#8083ff]/15 flex items-center justify-center">📄</span>
+        <div class="flex-1 min-w-0"><p class="text-sm truncate">${esc(f.name)}</p>${f.folder?`<p class="text-[10px] text-[#64748b]">${esc(f.folder)}</p>`:''}</div>
+        <span class="text-[#64748b]">›</span></a>`).join('') || '<p class="text-sm text-[#64748b] text-center py-8">Sin archivos</p>'}
+    </div>`;
+}
+
+function avances() {
+  const gh = state.gh;
+  const tab = (id,label,count) => `<button data-act="ghtab" data-id="${id}" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${state.ghTab===id?'bg-[#8083ff] text-white':'text-[#94A3B8] hover:text-[#F8FAFC]'}">${label}${count?`<span class="text-[9px] px-1 rounded-full ${state.ghTab===id?'bg-white/25':'bg-[#283449]'}">${count}</span>`:''}</button>`;
+  const sBadge = (s)=>({open:'bg-[#4edea3]/15 text-[#4edea3]',merged:'bg-[#8083ff]/15 text-[#c0c1ff]',closed:'bg-[#64748b]/20 text-[#94A3B8]'}[s]||'bg-[#64748b]/20 text-[#94A3B8]');
+  let ghBody;
+  if (gh && gh.error) {
+    ghBody = `<div class="flex items-start gap-2 text-[12px] text-[#F59E0B] bg-[#F59E0B]/10 rounded-lg p-3">
+      <span>⚠️</span><div><p class="font-semibold">No se pudo leer GitHub</p><p class="text-[#94A3B8] mt-0.5">${esc(gh.error)}</p></div></div>`;
+  } else if (state.ghLoading && !gh) {
+    ghBody = `<p class="text-sm text-[#64748b] py-6 text-center">Cargando actividad…</p>`;
+  } else if (gh) {
+    let list = '';
+    if (state.ghTab==='commits') list = (gh.commits||[]).map(c=>`<a href="${esc(c.url||'#')}" target="_blank" rel="noopener" class="flex items-center gap-3 py-2 px-2.5 rounded-lg hover:bg-[#1c2436]"><span class="text-[#4edea3]">◆</span><span class="text-sm truncate flex-1">${esc(c.message)}</span><span class="text-[10px] text-[#64748b] font-mono">${esc(c.sha)}</span><span class="text-[10px] text-[#64748b] w-12 text-right">${relTime(c.date)}</span></a>`).join('') || empty('commits');
+    if (state.ghTab==='prs') list = (gh.prs||[]).map(p=>`<a href="${esc(p.url||'#')}" target="_blank" rel="noopener" class="flex items-center gap-3 py-2 px-2.5 rounded-lg hover:bg-[#1c2436]"><span class="text-[#8083ff]">⇄</span><span class="text-sm truncate flex-1">#${p.number} ${esc(p.title)}</span><span class="text-[9px] px-1.5 py-0.5 rounded-full ${sBadge(p.state)}">${esc(p.state)}</span><span class="text-[10px] text-[#64748b] w-12 text-right">${relTime(p.date)}</span></a>`).join('') || empty('PRs');
+    if (state.ghTab==='issues') list = (gh.issues||[]).map(i=>`<a href="${esc(i.url||'#')}" target="_blank" rel="noopener" class="flex items-center gap-3 py-2 px-2.5 rounded-lg hover:bg-[#1c2436]"><span class="${i.state==='open'?'text-[#4edea3]':'text-[#64748b]'}">◉</span><span class="text-sm truncate flex-1">#${i.number} ${esc(i.title)}</span><span class="text-[9px] px-1.5 py-0.5 rounded-full ${sBadge(i.state)}">${esc(i.state)}</span><span class="text-[10px] text-[#64748b] w-12 text-right">${relTime(i.date)}</span></a>`).join('') || empty('issues');
+    ghBody = `<div class="inline-flex p-1 rounded-lg bg-[#0d1528] border border-[#283449] gap-1 mb-3">
+        ${tab('commits','Commits', gh.commits?gh.commits.length:0)}
+        ${tab('prs','PRs', gh.counts?gh.counts.openPrs:0)}
+        ${tab('issues','Issues', gh.counts?gh.counts.openIssues:0)}
+      </div><div class="space-y-1.5">${list}</div>`;
+  } else {
+    ghBody = `<p class="text-sm text-[#64748b] py-6 text-center">Pulsa ⟳ para cargar</p>`;
+  }
+  const ups = filteredUpdates();
+  return `<div class="space-y-5 fh-rise">
+    <div class="fh-card rounded-2xl p-5">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2"><span>🌿</span><h3 class="font-headline font-bold text-sm">Actividad GitHub</h3><span class="text-[10px] text-[#64748b] font-mono truncate max-w-[160px]">${esc(currentRepo())}</span></div>
+        <button data-act="gh-reload" class="p-1.5 rounded-lg hover:bg-[#1c2436] text-[#94A3B8] ${state.ghLoading?'spin':''}">⟳</button>
+      </div>${ghBody}
+    </div>
+    <div class="fh-card rounded-2xl p-5">
+      <div class="flex items-center gap-2 mb-3"><span>🚩</span><h3 class="font-headline font-bold text-sm">Diario de avances</h3>${state.selectedProject?`<span class="text-[10px] text-[#64748b]">· ${esc((state.projects.find(p=>p.id===state.selectedProject)||{}).name||'')}</span>`:''}</div>
+      <div class="flex items-center gap-2 mb-4">
+        <select id="note-kind" class="bg-[#0d1528] border border-[#283449] rounded-lg text-xs text-[#94A3B8] px-2 py-2 focus:outline-none focus:border-[#8083ff]">
+          <option value="nota">Nota</option><option value="hito">Hito</option><option value="bloqueo">Bloqueo</option></select>
+        <input id="note-input" placeholder="${state.selectedProject?'Nuevo avance…':'(se guarda como general si no eliges proyecto)'}" class="flex-1 bg-[#0d1528] border border-[#283449] rounded-lg text-sm px-3 py-2 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]" />
+        <button data-act="add-note" class="p-2 rounded-lg bg-[#8083ff] text-white hover:bg-[#6d70e6]">➤</button>
+      </div>
+      <div class="space-y-2.5">
+        ${ups.map(u=>{const k=KIND[u.kind||'nota']||KIND.nota;return `<div class="flex items-start gap-3"><div class="w-5 flex flex-col items-center pt-1"><span class="text-[#ffb783] text-[8px]">●</span><div class="w-px flex-1 bg-[#283449] mt-1"></div></div><div class="flex-1 min-w-0 pb-1"><div class="flex items-center gap-2"><span class="text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${k[1]}">${k[0]}</span><span class="text-[10px] text-[#64748b]">${relTime(u.created_at)}</span></div><p class="text-sm mt-1">${esc(u.note)}</p></div></div>`;}).join('') || '<p class="text-sm text-[#64748b] text-center py-6">Aún no hay avances anotados</p>'}
+      </div>
+    </div>
+  </div>`;
+}
+function empty(w){ return `<p class="text-sm text-[#64748b] py-6 text-center">Sin ${w}</p>`; }
+
+/* ── login screen ── */
+function renderLogin() {
+  $app.innerHTML = `
+  <div class="min-h-screen flex items-center justify-center p-6">
+    <div class="fh-card rounded-3xl p-8 max-w-sm w-full text-center fh-rise">
+      <div class="w-16 h-16 rounded-2xl mx-auto mb-5 flex items-center justify-center text-3xl" style="background:linear-gradient(135deg,#8083ff,#4edea3)">💼</div>
+      <h1 class="font-headline text-2xl font-bold mb-1">Workspace</h1>
+      <p class="text-sm text-[#94A3B8] mb-6">Tus proyectos y avances, conectados a FileHub.</p>
+      <button data-act="login" class="w-full py-3 rounded-xl bg-[#F8FAFC] text-[#0b1326] font-semibold mb-3">Entrar con Google</button>
+      <a href="../#dashboard" class="block text-xs text-[#64748b] hover:text-[#94A3B8]">Si ya usas FileHub en este navegador, tu sesión se comparte sola — <span class="underline">ábrelo y vuelve</span>.</a>
+    </div>
+  </div>`;
+}
+
+/* ── eventos (delegación) ── */
+document.addEventListener('click', async (e) => {
+  const el = e.target.closest('[data-act]'); if (!el) return;
+  const act = el.dataset.act;
+  if (act==='login') { await sb.auth.signInWithOAuth({ provider:'google', options:{ redirectTo: location.href } }); return; }
+  if (act==='logout') { await sb.auth.signOut(); location.reload(); return; }
+  if (act==='toggle-sidebar') { state.sidebar=!state.sidebar; render(); return; }
+  if (act==='close-sidebar') { state.sidebar=false; render(); return; }
+  if (act==='sec') { state.section=el.dataset.id; state.sidebar=false; render(); if (state.section==='avances' && !state.gh) loadGithub(); return; }
+  if (act==='proj') { state.selectedProject=el.dataset.id||null; state.sidebar=false; if (state.section==='avances'){ state.gh=null; render(); loadGithub(); } else render(); return; }
+  if (act==='cal-prev') { if(state.cal.m===0){state.cal.m=11;state.cal.y--;}else state.cal.m--; render(); return; }
+  if (act==='cal-next') { if(state.cal.m===11){state.cal.m=0;state.cal.y++;}else state.cal.m++; render(); return; }
+  if (act==='ghtab') { state.ghTab=el.dataset.id; render(); return; }
+  if (act==='gh-reload') { loadGithub(); return; }
+  if (act==='add-note') { await addNote(); return; }
+  if (act==='toggle-task') { await toggleTask(el.dataset.id); return; }
+  if (act==='add-task') { await addTask(); return; }
+});
+// range/select edits
+document.addEventListener('change', async (e) => {
+  const el = e.target.closest('[data-act]'); if (!el) return;
+  if (el.dataset.act==='proj-progress') { await updateProject(el.dataset.id, { progress: Number(el.value) }); }
+  if (el.dataset.act==='proj-status') { await updateProject(el.dataset.id, { status: el.value }); }
+});
+// label en vivo del slider (sin re-render por cada píxel)
+document.addEventListener('input', (e) => {
+  const el = e.target.closest('[data-act="proj-progress"]'); if (!el) return;
+  const lbl = document.getElementById('prog-label'); if (lbl) lbl.textContent = el.value + '%';
+});
+document.addEventListener('keydown', (e)=>{
+  if (e.key!=='Enter') return;
+  if (e.target.id==='note-input') addNote();
+  if (e.target.id==='task-input') addTask();
+});
+
+/* ── boot ── */
+(async function boot() {
+  try {
+    const { data:{ session } } = await sb.auth.getSession();
+    if (!session) { renderLogin(); }
+    else { state.user = session.user; await loadAll(); render(); }
+  } catch (e) {
+    $app.innerHTML = `<div class="min-h-screen flex items-center justify-center p-6 text-center text-[#94A3B8]"><div><p class="text-lg font-headline">No se pudo cargar</p><p class="text-sm mt-2">${esc(String(e&&e.message||e))}</p></div></div>`;
+  }
+  sb.auth.onAuthStateChange((_e, sess) => {
+    if (sess && !state.user) { state.user = sess.user; loadAll().then(render); }
+    else if (!sess && state.user) { state.user = null; renderLogin(); }
+  });
+})();
+
+/* ── PWA service worker ── */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(()=>{}));
+}
+</script>
+</body>
+</html>
