@@ -93,20 +93,20 @@ const projFiles = (pid) => { const p = proj(pid); return p ? state.files.filter(
 const projUpdates = (pid) => state.updates.filter(u => u.project_id === pid);
 const taskStage = (t) => t.completed ? 'hecho' : (t.stage==='en_curso' ? 'en_curso' : 'pendiente');
 
-/* ── data ── */
+/* ── data (tablas COMPARTIDAS ws_*: RLS de pareja Carlos+Raquel → los dos veis y editáis lo mismo) ── */
+const me = () => (state.user && state.user.email) || '';
 async function loadAll() {
-  const id = state.user.id;
-  const [pr,tk,ev,fi,up] = await Promise.all([
-    sb.from('projects').select('*').eq('user_id',id).order('created_at',{ascending:true}),
-    sb.from('tasks').select('*').eq('user_id',id).order('created_at',{ascending:false}).limit(300),
-    sb.from('calendar_events').select('*').eq('user_id',id).limit(400),
-    sb.from('files').select('*').eq('user_id',id).order('created_at',{ascending:false}).limit(300),
-    sb.from('project_updates').select('*').eq('user_id',id).order('created_at',{ascending:false}).limit(120),
+  const [pr,tk,mt,fi,up] = await Promise.all([
+    sb.from('ws_projects').select('*').order('created_at',{ascending:true}),
+    sb.from('ws_tasks').select('*').order('created_at',{ascending:false}).limit(500),
+    sb.from('ws_meetings').select('*').limit(500),
+    sb.from('ws_files').select('*').order('created_at',{ascending:false}).limit(500),
+    sb.from('ws_updates').select('*').order('created_at',{ascending:false}).limit(200),
   ]);
   state.projects = pr.data || [];
-  state.tasks = (tk.data||[]).map(t => ({...t, dueDate:t.due_date}));
-  state.events = (ev.data||[]).map(e => ({ id:e.id, title:e.title, date:(e.start_date||'').slice(0,10), type:e.type||'' }));
-  state.files = fi.data || [];
+  state.tasks = (tk.data||[]).map(t => ({ ...t, category:t.project_id, dueDate:t.due_date }));
+  state.events = (mt.data||[]).map(m => ({ id:m.id, title:m.title, date:(m.date||'').slice(0,10), type:'proj:'+m.project_id }));
+  state.files = (fi.data||[]).map(f => ({ ...f, folder:((state.projects.find(p=>p.id===f.project_id)||{}).name)||'Workspace', tags:['proj:'+f.project_id] }));
   state.updates = up.data || [];
 }
 async function loadGithub() {
@@ -122,38 +122,39 @@ async function loadGithub() {
 async function addNote(pid) {
   const inp = document.getElementById('note-input'); const sel = document.getElementById('note-kind');
   const note = (inp&&inp.value||'').trim(); if (!note) return;
-  const row = { id:'upd-'+uid(), user_id:state.user.id, project_id: pid || state.selectedProject || 'general', note, kind: sel?sel.value:'nota', progress:null, created_at:new Date().toISOString() };
+  const row = { id:'upd-'+uid(), project_id: pid || state.selectedProject || 'general', note, kind: sel?sel.value:'nota', created_by: me(), created_at:new Date().toISOString() };
   state.updates.unshift(row); render();
-  try { await sb.from('project_updates').insert(row); } catch(_){}
+  try { await sb.from('ws_updates').insert(row); } catch(_){}
 }
 async function toggleTask(id) {
   const t = state.tasks.find(x=>x.id===id); if(!t) return;
   t.completed=!t.completed; if(t.completed) t.stage=null; render();
-  try { await sb.from('tasks').update({completed:t.completed, stage:t.stage}).eq('id',id); } catch(_){}
+  try { await sb.from('ws_tasks').update({completed:t.completed, stage:t.stage}).eq('id',id); } catch(_){}
 }
 async function setStage(id, target) {
   const t = state.tasks.find(x=>x.id===id); if(!t) return;
   if (target==='hecho'){ t.completed=true; t.stage=null; } else { t.completed=false; t.stage=(target==='en_curso'?'en_curso':null); }
   render();
-  try { await sb.from('tasks').update({completed:t.completed, stage:t.stage}).eq('id',id); } catch(_){}
+  try { await sb.from('ws_tasks').update({completed:t.completed, stage:t.stage}).eq('id',id); } catch(_){}
 }
 async function addTask(pid) {
   const inp = document.getElementById('task-input'); const title=(inp&&inp.value||'').trim(); if(!title) return;
-  const row = { id:'task-'+uid(), user_id:state.user.id, title, completed:false, category: pid || state.selectedProject || 'general', priority:'medium', due_date:null, is_recurring:false, stage:null, created_at:new Date().toISOString() };
-  state.tasks.unshift({...row, dueDate:null}); render();
-  try { await sb.from('tasks').insert(row); } catch(_){}
+  const project_id = pid || state.selectedProject || 'general';
+  const row = { id:'task-'+uid(), project_id, title, completed:false, stage:null, priority:'medium', due_date:null, created_by: me(), created_at:new Date().toISOString() };
+  state.tasks.unshift({ ...row, category:project_id, dueDate:null }); render();
+  try { await sb.from('ws_tasks').insert(row); } catch(_){}
 }
 async function updateProject(id, patch) {
   const p = proj(id); if(!p) return; Object.assign(p,patch); render();
-  try { await sb.from('projects').update(patch).eq('id',id); } catch(_){}
+  try { await sb.from('ws_projects').update(patch).eq('id',id); } catch(_){}
 }
 async function addMeeting(pid) {
   const dateEl=document.getElementById('mtg-date'); const titleEl=document.getElementById('mtg-title');
   const date=(dateEl&&dateEl.value)||''; const title=(titleEl&&titleEl.value||'').trim();
   if (!date || !title) { return; }
-  const row = { id:'evt-'+uid(), user_id:state.user.id, title, start_date:date, end_date:date, type:'proj:'+pid, shared:false, created_at:new Date().toISOString() };
-  state.events.push({ id:row.id, title, date, type:row.type }); render();
-  try { await sb.from('calendar_events').insert(row); } catch(e){ alert('No se pudo guardar la reunión: '+(e&&e.message||e)); }
+  const row = { id:'evt-'+uid(), project_id:pid, title, date, created_by: me(), created_at:new Date().toISOString() };
+  state.events.push({ id:row.id, title, date, type:'proj:'+pid }); render();
+  try { await sb.from('ws_meetings').insert(row); } catch(e){ alert('No se pudo guardar la reunión: '+(e&&e.message||e)); }
 }
 function pickFile(pid) {
   $file.value=''; $file.onchange = async () => { const f=$file.files&&$file.files[0]; if(f) await uploadFile(pid,f); };
@@ -168,11 +169,9 @@ async function uploadFile(pid, file) {
     if (error) throw error;
     const { data } = sb.storage.from('files').getPublicUrl(path);
     const p = proj(pid);
-    const row = { id:'file-'+uid(), user_id:state.user.id, name:file.name, type:file.type||'', size:file.size,
-      date:new Date().toISOString().slice(0,10), category:'documento', folder: p?p.name:'Workspace',
-      url:data.publicUrl, bucket:'files', storage_path:path, tags:['workspace','proj:'+pid], created_at:new Date().toISOString() };
-    state.files.unshift(row);
-    await sb.from('files').insert(row);
+    const row = { id:'file-'+uid(), project_id:pid, name:file.name, url:data.publicUrl, storage_path:path, created_by: me(), created_at:new Date().toISOString() };
+    state.files.unshift({ ...row, folder: p?p.name:'Workspace', tags:['proj:'+pid] });
+    await sb.from('ws_files').insert(row);
   } catch(e){ alert('Error subiendo el archivo: '+(e&&e.message||e)); }
   state.uploading=false; render();
 }
