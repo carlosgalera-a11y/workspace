@@ -51,8 +51,10 @@
 const SUPA_URL = 'https://igvadjgjpyuvzailjqwg.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlndmFkamdqcHl1dnphaWxqcXdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NDI3MTAsImV4cCI6MjA4ODAxODcxMH0.eAqKCHDzrkvMTseaBP0I_JICP1owX60-cp3agYqRz4Q';
 const DEFAULT_REPO = 'carlosgalera-a11y/filehub2026';
-const APP_URL = 'https://carlosgalera-a11y.github.io/workspace/';
+// URL propia (dinámica): funciona en github.io/workspace/ Y en el dominio propio.
+const APP_URL = (typeof location !== 'undefined' && location.origin) ? (location.origin + location.pathname) : 'https://filehubworkspace.com/';
 const CAL_URL = 'https://carlosgalera-a11y.github.io/calendario.html';
+const FILEHUB_URL = 'https://carlosgalera-a11y.github.io/';
 
 const sb = window.supabase.createClient(SUPA_URL, SUPA_KEY, { auth:{ persistSession:true, autoRefreshToken:true } });
 const $app = document.getElementById('app');
@@ -236,7 +238,7 @@ function sidebar() {
       <div class="mb-5">
         <p class="text-[10px] font-semibold text-[#64748b] uppercase tracking-wider mb-2 px-2">Enlaces</p>
         <a href="${CAL_URL}" target="_blank" rel="noopener" class="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-[#94A3B8] hover:bg-[#1c2436] mt-0.5"><span class="w-4 text-center">📅</span><span>Mi calendario</span></a>
-        <a href="../" class="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-[#94A3B8] hover:bg-[#1c2436] mt-0.5"><span class="w-4 text-center">⚡</span><span>FileHub</span></a>
+        <a href="${FILEHUB_URL}" class="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-[#94A3B8] hover:bg-[#1c2436] mt-0.5"><span class="w-4 text-center">⚡</span><span>FileHub</span></a>
       </div>
       <div class="mt-6 flex items-center gap-2 px-2 py-2 rounded-lg bg-[#131b2e] border border-[#283449]">
         <div class="w-7 h-7 rounded-full bg-[#4edea3]/25 flex items-center justify-center text-xs">👤</div>
@@ -407,7 +409,7 @@ function renderLogin() {
     <h1 class="font-headline text-2xl font-bold mb-1">Workspace</h1>
     <p class="text-sm text-[#94A3B8] mb-6">Tus proyectos y avances, conectados a FileHub.</p>
     <button data-act="login" class="w-full py-3 rounded-xl bg-[#F8FAFC] text-[#0b1326] font-semibold mb-3">Entrar con Google</button>
-    <a href="../#dashboard" class="block text-xs text-[#64748b] hover:text-[#94A3B8]">Si ya usas FileHub en este navegador, tu sesión se comparte sola — <span class="underline">ábrelo y vuelve</span>.</a>
+    <a href="${FILEHUB_URL}#dashboard" class="block text-xs text-[#64748b] hover:text-[#94A3B8]">¿Prefieres abrir <span class="underline">FileHub</span> directamente?</a>
   </div></div>`;
 }
 
