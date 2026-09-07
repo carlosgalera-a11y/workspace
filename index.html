@@ -307,7 +307,11 @@ function overview() {
 function projectDashboard(p) {
   if (!p) return overview();
   const prog = Math.max(0,Math.min(100,Number(p.progress)||0));
-  const ts = projTasks(p.id);
+  let ts = projTasks(p.id);
+  { const f=state.taskFilter;
+    if(f==='mias') ts=ts.filter(t=>t.assignee===me());
+    else if(f==='comunes') ts=ts.filter(t=>(t.scope||'comun')==='comun');
+    else if(f==='individuales') ts=ts.filter(t=>t.scope==='individual'); }
   const col = (title, items, emptyMsg) => `<div class="flex-1 min-w-0">
     <p class="text-[11px] font-semibold text-[#94A3B8] mb-2 px-1">${title} <span class="text-[#64748b]">${items.length}</span></p>
     <div class="space-y-1.5">${items.map(taskCard).join('') || `<p class="text-[11px] text-[#64748b] px-1 py-3">${emptyMsg}</p>`}</div>
@@ -326,9 +330,15 @@ function projectDashboard(p) {
     <!-- tablero -->
     <div class="fh-card rounded-2xl p-5">
       <div class="flex items-center justify-between mb-3"><h3 class="font-headline font-bold text-sm">Tablero</h3></div>
-      <div class="flex items-center gap-2 mb-4">
-        <input id="task-input" placeholder="Nueva tarea de ${esc(p.name)}…" class="flex-1 bg-[#0d1528] border border-[#283449] rounded-lg text-sm px-3 py-2 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]" />
-        <button data-act="add-task" data-id="${esc(p.id)}" class="p-2 rounded-lg bg-[#8083ff] text-white hover:bg-[#6d70e6]">＋</button>
+      <div class="flex items-center gap-2 mb-3 flex-wrap">
+        <input id="task-input" placeholder="Nueva tarea de ${esc(p.name)}…" class="flex-1 min-w-[140px] bg-[#0d1528] border border-[#283449] rounded-lg text-sm px-3 py-2 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]" />
+        <select id="task-scope" class="${selCls}"><option value="comun">Común</option><option value="individual">Individual</option></select>
+        <select id="task-assignee" class="${selCls}"><option value="">Sin asignar</option>${TEAM.map(m=>`<option value="${esc(m.email)}">${esc(m.name)}</option>`).join('')}</select>
+        <input type="hidden" id="task-proj" value="${esc(p.id)}" />
+        <button data-act="add-task2" class="p-2 rounded-lg bg-[#8083ff] text-white hover:bg-[#6d70e6]">＋</button>
+      </div>
+      <div class="flex items-center gap-1.5 flex-wrap mb-3">
+        ${[['todas','Todas'],['mias','👤 Mías'],['comunes','Comunes'],['individuales','Individuales']].map(([id,lab])=>`<button data-act="tfilter" data-id="${id}" class="px-2.5 py-1 rounded-full text-[11px] font-semibold ${state.taskFilter===id?'bg-[#8083ff]/20 text-[#c0c1ff] border border-[#8083ff]/40':'text-[#94A3B8] border border-[#283449] hover:text-[#F8FAFC]'}">${lab}</button>`).join('')}
       </div>
       <div class="flex flex-col sm:flex-row gap-4">
         ${col('⚪ Pendiente', pend, 'Nada pendiente')}
@@ -367,9 +377,20 @@ function projectDashboard(p) {
 function taskCard(t) {
   const stg = taskStage(t);
   const moves = stg==='pendiente' ? [['en_curso','▶'],['hecho','✓']] : stg==='en_curso' ? [['pendiente','◀'],['hecho','✓']] : [['pendiente','↺']];
-  return `<div class="flex items-center gap-2 py-2 px-2.5 rounded-lg bg-[#0d1528] ${stg==='hecho'?'opacity-60':''}">
-    <span class="text-sm flex-1 min-w-0 truncate ${stg==='hecho'?'line-through text-[#64748b]':''}">${esc(t.title)}</span>
-    <div class="flex gap-1 shrink-0">${moves.map(([tg,ic])=>`<button data-act="stage" data-id="${esc(t.id)}" data-stage="${tg}" class="w-6 h-6 rounded-md bg-[#1c2436] text-[#94A3B8] hover:text-[#F8FAFC] text-xs">${ic}</button>`).join('')}</div>
+  const scope=t.scope||'comun';
+  const tipo = scope==='individual' ? ['individual','bg-[#64748b]/20 text-[#94A3B8]'] : ['común','bg-[#4edea3]/15 text-[#4edea3]'];
+  const who = t.assignee ? (TEAM_NAME[t.assignee]||String(t.assignee).split('@')[0]) : '';
+  const pr = PRIOB[t.priority||'medium']||PRIOB.medium;
+  return `<div class="rounded-lg bg-[#0d1528] p-2.5 ${stg==='hecho'?'opacity-60':''}">
+    <div class="flex items-start gap-2">
+      <span class="text-sm flex-1 min-w-0 ${stg==='hecho'?'line-through text-[#64748b]':''}">${esc(t.title)}</span>
+      <div class="flex gap-1 shrink-0">${moves.map(([tg,ic])=>`<button data-act="stage" data-id="${esc(t.id)}" data-stage="${tg}" class="w-6 h-6 rounded-md bg-[#1c2436] text-[#94A3B8] hover:text-[#F8FAFC] text-xs">${ic}</button>`).join('')}</div>
+    </div>
+    <div class="flex items-center gap-1 flex-wrap mt-1.5">
+      <span class="text-[9px] px-1.5 py-0.5 rounded-full ${tipo[1]}">${tipo[0]}</span>
+      ${who?`<span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#131b2e] border border-[#283449] text-[#94A3B8]">👤 ${esc(who)}</span>`:''}
+      <span class="text-[9px] px-1.5 py-0.5 rounded-full ${pr[1]}">${pr[0]}</span>
+    </div>
   </div>`;
 }
 
@@ -538,7 +559,7 @@ document.addEventListener('input', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key!=='Enter') return;
   if (e.target.id==='note-input') addNote();
-  if (e.target.id==='task-input') { if(state.section==='tareas') addTaskFull(); else addTask(state.selectedProject); }
+  if (e.target.id==='task-input') { if(document.getElementById('task-scope')) addTaskFull(); else addTask(state.selectedProject); }
   if (e.target.id==='mtg-title') addMeeting(state.selectedProject);
 });
 
