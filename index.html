@@ -233,6 +233,8 @@ function render() {
     </div>
     ${state.sidebar?`<div data-act="close-sidebar" class="md:hidden fixed inset-0 bg-black/50 z-30"></div>`:''}
     ${state.notifOpen?`<div data-act="notif-close" class="fixed inset-0 z-20"></div>`:''}`;
+  // el chat siempre abajo del todo (último mensaje visible)
+  try{ const _cs=document.getElementById('chat-scroll'); if(_cs) _cs.scrollTop=_cs.scrollHeight; }catch(_){}
 }
 async function refreshData(){
   if(!state.user||state.refreshing) return;
@@ -417,6 +419,33 @@ function overview() {
   </div>`;
 }
 
+function projectChat(p){
+  const msgs = projUpdates(p.id).slice().sort((a,b)=>String(a.created_at||'').localeCompare(String(b.created_at||'')));
+  const rows = msgs.map(u=>{
+    const mine = u.created_by===me();
+    const who = TEAM_NAME[u.created_by]||(u.created_by?String(u.created_by).split('@')[0]:'—');
+    const k = KINDC[u.kind||'comentario']||KINDC.comentario;
+    const tag = (u.kind==='avance'||u.kind==='problema') ? `<span class="text-[9px] px-1.5 py-0.5 rounded-full ${k[1]} inline-block mb-1">${k[0]}</span><br>` : '';
+    return `<div class="flex ${mine?'justify-end':'justify-start'}">
+      <div class="max-w-[80%] px-3.5 py-2 ${mine?'bg-[#8083ff] text-white rounded-2xl rounded-br-md':'bg-[#1c2436] text-[#F8FAFC] rounded-2xl rounded-bl-md'}">
+        ${!mine?`<p class="text-[10px] font-bold text-[#c0c1ff] mb-0.5">${esc(who)}</p>`:''}
+        ${tag}<span class="text-sm whitespace-pre-wrap break-words leading-relaxed">${esc(u.note)}</span>
+        <p class="text-[9px] ${mine?'text-white/60':'text-[#64748b]'} mt-1 text-right">${relTime(u.created_at)}</p>
+      </div>
+    </div>`;
+  }).join('');
+  const otro = me()==='raquelft87@gmail.com'?'Carlos':'Raquel';
+  return `<div class="fh-card rounded-2xl p-4">
+    <div class="flex items-center justify-between mb-3"><div class="flex items-center gap-2"><span>💬</span><h3 class="font-headline font-bold text-sm">Chat · ${esc(p.name)}</h3></div><span class="text-[10px] text-[#4edea3] flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-[#4edea3]"></span>privado · tú y ${esc(otro)}</span></div>
+    <div id="chat-scroll" class="space-y-2 overflow-y-auto py-2" style="max-height:46vh">${rows || '<p class="text-sm text-[#64748b] text-center py-8">Aún no hay mensajes. Escribe el primero 👇</p>'}</div>
+    <div class="flex items-end gap-2 mt-3">
+      <select id="note-kind" class="bg-[#0d1528] border border-[#283449] rounded-full text-sm text-[#94A3B8] px-2 py-2.5 focus:outline-none focus:border-[#8083ff] shrink-0" title="Tipo"><option value="comentario">💬</option><option value="avance">✅</option><option value="problema">⚠️</option></select>
+      <textarea id="note-input" rows="1" placeholder="Escribe un mensaje…" class="flex-1 bg-[#0d1528] border border-[#283449] rounded-2xl text-sm px-3.5 py-2.5 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]" style="resize:none;max-height:120px"></textarea>
+      <button data-act="add-note" data-id="${esc(p.id)}" class="shrink-0 w-10 h-10 rounded-full bg-[#8083ff] text-white flex items-center justify-center hover:bg-[#6d70e6]">➤</button>
+    </div>
+    <p class="text-[10px] text-[#64748b] mt-1.5 text-center">Enter envía · Mayús+Enter salto de línea</p>
+  </div>`;
+}
 function projectDashboard(p) {
   if (!p) return overview();
   const prog = Math.max(0,Math.min(100,Number(p.progress)||0));
@@ -432,6 +461,8 @@ function projectDashboard(p) {
   const pend = ts.filter(t=>taskStage(t)==='pendiente'), curso = ts.filter(t=>taskStage(t)==='en_curso'), hecho = ts.filter(t=>taskStage(t)==='hecho');
   const mtgs = projMeetings(p.id), ups = projUpdates(p.id), fls = projFiles(p.id);
   return `<div class="space-y-5 fh-rise">
+    <!-- chat (lo primero que se ve) -->
+    ${projectChat(p)}
     <!-- progreso + estado -->
     <div class="fh-card rounded-2xl p-5">
       <div class="flex items-center justify-between mb-4 gap-3">
@@ -468,25 +499,6 @@ function projectDashboard(p) {
         <button data-act="add-mtg" data-id="${esc(p.id)}" class="px-3 py-2 rounded-lg bg-[#4edea3] text-[#0b1326] font-semibold text-sm">Añadir</button>
       </div>
       <div class="space-y-1.5">${mtgs.map(m=>`<div class="flex items-center gap-3 py-2 px-2.5 rounded-lg bg-[#0d1528]"><span class="text-[#4edea3]">📅</span><span class="text-sm flex-1 truncate">${esc(m.title)}</span><span class="text-[11px] text-[#94A3B8]">${esc(m.date)}</span></div>`).join('') || '<p class="text-sm text-[#64748b] text-center py-4">Sin reuniones programadas</p>'}</div>
-    </div>
-    <!-- comentarios / hilo (avances y problemas) -->
-    <div class="fh-card rounded-2xl p-5">
-      <div class="flex items-center gap-2 mb-3"><span>💬</span><h3 class="font-headline font-bold text-sm">Comentarios y avances</h3></div>
-      <div class="mb-4">
-        <textarea id="note-input" rows="3" placeholder="Escribe un comentario, un avance o un problema de ${esc(p.name)}… (tan largo como quieras)" class="w-full bg-[#0d1528] border border-[#283449] rounded-lg text-sm px-3 py-2.5 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]" style="resize:vertical;min-height:72px"></textarea>
-        <div class="flex items-center gap-2 mt-2">
-          <select id="note-kind" class="bg-[#0d1528] border border-[#283449] rounded-lg text-xs text-[#94A3B8] px-2 py-2 focus:outline-none focus:border-[#8083ff]"><option value="comentario">💬 Comentario</option><option value="avance">✅ Avance</option><option value="problema">⚠️ Problema</option></select>
-          <span class="text-[10px] text-[#64748b] hidden sm:inline">Se guarda con tu nombre</span>
-          <button data-act="add-note" data-id="${esc(p.id)}" class="ml-auto px-4 py-2 rounded-lg bg-[#8083ff] text-white text-sm font-semibold hover:bg-[#6d70e6]">Publicar</button>
-        </div>
-      </div>
-      <div class="space-y-3">${ups.map(u=>{const k=KINDC[u.kind||'comentario']||KINDC.comentario; const who=TEAM_NAME[u.created_by]||(u.created_by?String(u.created_by).split('@')[0]:'—'); const ini=((who[0]||'?')).toUpperCase(); const mine=u.created_by===me(); return `<div class="flex items-start gap-2.5">
-        <div class="w-7 h-7 rounded-full ${mine?'bg-[#4edea3]/25 text-[#4edea3]':'bg-[#8083ff]/25 text-[#c0c1ff]'} flex items-center justify-center text-[11px] font-bold shrink-0">${esc(ini)}</div>
-        <div class="flex-1 min-w-0 bg-[#0d1528] rounded-xl rounded-tl-sm p-3">
-          <div class="flex items-center gap-2 flex-wrap mb-1"><span class="text-xs font-bold text-[#F8FAFC]">${esc(who)}${mine?' (tú)':''}</span><span class="text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${k[1]}">${k[0]}</span><span class="text-[10px] text-[#64748b]">${relTime(u.created_at)}</span></div>
-          <p class="text-sm text-[#F8FAFC] whitespace-pre-wrap break-words leading-relaxed">${esc(u.note)}</p>
-        </div>
-      </div>`;}).join('') || '<p class="text-sm text-[#64748b] text-center py-6">Aún no hay comentarios. Escribe el primero 👆</p>'}</div>
     </div>
     <!-- archivos -->
     <div class="fh-card rounded-2xl p-5">
@@ -685,6 +697,8 @@ document.addEventListener('input', (e) => {
 });
 document.addEventListener('keydown', (e) => {
   if (e.key!=='Enter') return;
+  // Chat: Enter envía, Mayús+Enter salto de línea
+  if (e.target.id==='note-input') { if(e.shiftKey) return; e.preventDefault(); addNote(state.selectedProject); return; }
   if (e.target.id==='task-input') { if(document.getElementById('task-scope')) addTaskFull(); else addTask(state.selectedProject); }
   if (e.target.id==='mtg-title') { if(document.getElementById('mtg-proj')) addMeetingGlobal(); else addMeeting(state.selectedProject); }
 });
