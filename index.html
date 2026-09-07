@@ -72,6 +72,7 @@ const state = {
   cal: { m: new Date().getMonth(), y: new Date().getFullYear() },
   sidebar: false, urlBar: true, uploading: false,
   taskFilter: 'todas', taskDone: 'pendientes',
+  refreshing: false, notifOpen: false,
 };
 const TEAM = [{email:'carlosgalera2roman@gmail.com',name:'Carlos'},{email:'raquelft87@gmail.com',name:'Raquel'}];
 const TEAM_NAME = { 'carlosgalera2roman@gmail.com':'Carlos', 'raquelft87@gmail.com':'Raquel' };
@@ -212,7 +213,14 @@ function render() {
         <main class="flex-1 p-4 md:p-6 overflow-auto">${mainContent()}</main>
       </div>
     </div>
-    ${state.sidebar?`<div data-act="close-sidebar" class="md:hidden fixed inset-0 bg-black/50 z-30"></div>`:''}`;
+    ${state.sidebar?`<div data-act="close-sidebar" class="md:hidden fixed inset-0 bg-black/50 z-30"></div>`:''}
+    ${state.notifOpen?`<div data-act="notif-close" class="fixed inset-0 z-20"></div>`:''}`;
+}
+async function refreshData(){
+  if(!state.user||state.refreshing) return;
+  state.refreshing=true; render();
+  try{ await loadAll(); }catch(_){}
+  state.refreshing=false; render();
 }
 
 function urlBar() {
@@ -263,17 +271,42 @@ function sidebar() {
   </aside>`;
 }
 
+function myNotifs(){
+  const meE=me(); const today=new Date().toISOString().slice(0,10); const tomorrow=new Date(Date.now()+86400000).toISOString().slice(0,10);
+  const myTasks = state.tasks.filter(t=>!t.completed && t.assignee===meE);
+  const soonMtgs = state.events.filter(e=> e.date===today || e.date===tomorrow);
+  const teamAct = state.updates.filter(u=>u.created_by && u.created_by!==meE).slice(0,5);
+  return { count: myTasks.length + soonMtgs.length, myTasks, soonMtgs, teamAct };
+}
+function notifPanel(){
+  const n=myNotifs(); const pjName=id=>(proj(id)||{}).name||''; const today=new Date().toISOString().slice(0,10);
+  const item=(icon,text,sub)=>`<div class="flex items-start gap-2 px-3 py-2"><span class="shrink-0">${icon}</span><div class="min-w-0 flex-1"><p class="text-sm text-[#F8FAFC] break-words">${esc(text)}</p>${sub?`<p class="text-[10px] text-[#64748b]">${esc(sub)}</p>`:''}</div></div>`;
+  const sect=(title,rows)=>rows.length?`<p class="text-[10px] font-semibold text-[#64748b] uppercase tracking-wider px-3 pt-2">${title}</p>${rows.join('')}`:'';
+  const tasksR=n.myTasks.map(t=>item('📋',t.title, (t.category&&t.category!=='general'?pjName(t.category)+' · ':'')+(PRIOB[t.priority||'medium']||PRIOB.medium)[0]));
+  const mtgR=n.soonMtgs.map(m=>item('📅',m.title, (m.date===today?'hoy':'mañana')+' · '+m.date));
+  const teamR=n.teamAct.map(u=>item('🚩',u.note, (TEAM_NAME[u.created_by]||String(u.created_by).split('@')[0])+' · '+relTime(u.created_at)));
+  const body = (tasksR.length||mtgR.length||teamR.length) ? `${sect('Para ti', tasksR.concat(mtgR))}${sect('Actividad del equipo', teamR)}` : `<p class="text-sm text-[#64748b] text-center py-6">Sin novedades 🎉</p>`;
+  return `<div class="absolute right-0 mt-2 w-72 max-h-[70vh] overflow-auto fh-card rounded-2xl z-50 py-1" style="box-shadow:0 12px 40px rgba(0,0,0,.5)"><div class="flex items-center justify-between px-3 py-2 border-b border-[#283449]"><span class="text-sm font-headline font-bold">Notificaciones</span><button data-act="notif-toggle" class="text-[#64748b] hover:text-[#F8FAFC]">✕</button></div>${body}</div>`;
+}
 function topbar() {
   const label = { overview:'Panel general', avances:'Avances', calendario:'Calendario', tareas:'Tareas', archivos:'Archivos' }[state.section];
   const p = state.selectedProject ? proj(state.selectedProject) : null;
   const title = p ? p.name : label;
-  return `<header class="sticky top-0 z-20 backdrop-blur-md bg-[#0b1326]/85 border-b border-[#283449] px-4 md:px-6 py-3 flex items-center gap-3">
+  const nCount = myNotifs().count;
+  return `<header class="sticky top-0 z-30 backdrop-blur-md bg-[#0b1326]/85 border-b border-[#283449] px-4 md:px-6 py-3 flex items-center gap-3">
     <button data-act="toggle-sidebar" class="md:hidden text-[#94A3B8] text-xl leading-none">☰</button>
     <div class="min-w-0">
       <div class="flex items-center gap-1.5 text-[11px] text-[#64748b]"><span>Workspace</span><span>›</span><span class="text-[#94A3B8]">${p?esc(p.name):label}</span></div>
       <h2 class="font-headline text-lg font-bold leading-tight truncate">${esc(title)}</h2>
     </div>
-    ${p&&p.notebook_url?`<a href="${esc(p.notebook_url)}" target="_blank" rel="noopener" class="ml-auto shrink-0 text-[11px] px-3 py-1.5 rounded-lg bg-[#4edea3]/15 text-[#4edea3] font-semibold">Abrir web ↗</a>`:''}
+    <div class="ml-auto flex items-center gap-2 shrink-0">
+      ${p&&p.notebook_url?`<a href="${esc(p.notebook_url)}" target="_blank" rel="noopener" class="hidden sm:inline text-[11px] px-3 py-1.5 rounded-lg bg-[#4edea3]/15 text-[#4edea3] font-semibold">Abrir web ↗</a>`:''}
+      <button data-act="refresh" title="Actualizar" class="w-9 h-9 rounded-lg bg-[#131b2e] border border-[#283449] text-[#94A3B8] hover:text-[#F8FAFC] flex items-center justify-center ${state.refreshing?'spin':''}">⟳</button>
+      <div class="relative">
+        <button data-act="notif-toggle" title="Notificaciones" class="w-9 h-9 rounded-lg bg-[#131b2e] border border-[#283449] text-[#94A3B8] hover:text-[#F8FAFC] flex items-center justify-center relative">🔔${nCount?`<span class="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-[#EF4444] text-white text-[9px] font-bold flex items-center justify-center">${nCount>9?'9+':nCount}</span>`:''}</button>
+        ${state.notifOpen?notifPanel():''}
+      </div>
+    </div>
   </header>`;
 }
 
@@ -530,8 +563,11 @@ document.addEventListener('click', async (e) => {
   if (a==='copy-url'){ copyUrl(); return; }
   if (a==='share-url'){ shareUrl(); return; }
   if (a==='hide-url'){ state.urlBar=false; render(); return; }
-  if (a==='sec'){ state.section=id; state.sidebar=false; render(); if(state.section==='avances'&&!state.gh) loadGithub(); return; }
-  if (a==='proj'){ state.selectedProject=id||null; state.section='overview'; state.sidebar=false; if(state.gh){state.gh=null;} render(); return; }
+  if (a==='refresh'){ await refreshData(); return; }
+  if (a==='notif-toggle'){ state.notifOpen=!state.notifOpen; render(); return; }
+  if (a==='notif-close'){ state.notifOpen=false; render(); return; }
+  if (a==='sec'){ state.section=id; state.sidebar=false; state.notifOpen=false; render(); if(state.section==='avances'&&!state.gh) loadGithub(); return; }
+  if (a==='proj'){ state.selectedProject=id||null; state.section='overview'; state.sidebar=false; state.notifOpen=false; if(state.gh){state.gh=null;} render(); return; }
   if (a==='cal-prev'){ if(state.cal.m===0){state.cal.m=11;state.cal.y--;}else state.cal.m--; render(); return; }
   if (a==='cal-next'){ if(state.cal.m===11){state.cal.m=0;state.cal.y++;}else state.cal.m++; render(); return; }
   if (a==='ghtab'){ state.ghTab=id; render(); return; }
