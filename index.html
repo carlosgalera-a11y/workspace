@@ -71,7 +71,22 @@ const state = {
   gh: null, ghLoading: false, ghTab: 'commits',
   cal: { m: new Date().getMonth(), y: new Date().getFullYear() },
   sidebar: false, urlBar: true, uploading: false,
+  taskFilter: 'todas', taskDone: 'pendientes',
 };
+const TEAM = [{email:'carlosgalera2roman@gmail.com',name:'Carlos'},{email:'raquelft87@gmail.com',name:'Raquel'}];
+const TEAM_NAME = { 'carlosgalera2roman@gmail.com':'Carlos', 'raquelft87@gmail.com':'Raquel' };
+const selCls = 'bg-[#0d1528] border border-[#283449] rounded-lg text-xs text-[#94A3B8] px-2 py-2 focus:outline-none focus:border-[#8083ff]';
+const PRIOB = { urgent:['urgente','bg-[#EF4444]/20 text-[#EF4444]'], high:['alta','bg-[#F59E0B]/20 text-[#F59E0B]'], medium:['media','bg-[#8083ff]/20 text-[#c0c1ff]'], low:['baja','bg-[#64748b]/20 text-[#94A3B8]'] };
+function dateBadge(d){
+  const s=String(d||'').slice(0,10); if(!s) return null;
+  const today=new Date().toISOString().slice(0,10);
+  if(s===today) return ['hoy','bg-[#4edea3]/15 text-[#4edea3]'];
+  const diff=Math.round((new Date(s)-new Date(today))/86400000);
+  const fmt=new Date(s).toLocaleDateString('es-ES',{day:'numeric',month:'short'});
+  if(diff<0) return ['venció '+fmt,'bg-[#EF4444]/15 text-[#EF4444]'];
+  if(diff<=7) return ['en '+diff+' d','bg-[#131b2e] border border-[#283449] text-[#94A3B8]'];
+  return [fmt,'bg-[#131b2e] border border-[#283449] text-[#94A3B8]'];
+}
 
 function relTime(iso) {
   if (!iso) return ''; const d = new Date(iso).getTime(); if (isNaN(d)) return '';
@@ -372,11 +387,82 @@ function calendar() {
     <p class="text-[10px] text-[#64748b] mt-3 text-center">Las reuniones de tus proyectos aparecen aquí y en <a href="${CAL_URL}" target="_blank" rel="noopener" class="text-[#8083ff] underline">tu calendario ↗</a></p>`;
 }
 
+function addTaskRow(){
+  const pjOpts = ['<option value="">Sin proyecto</option>'].concat(state.projects.map(p=>`<option value="${esc(p.id)}" ${state.selectedProject===p.id?'selected':''}>${esc(p.name)}</option>`)).join('');
+  const asOpts = ['<option value="">Sin asignar</option>'].concat(TEAM.map(m=>`<option value="${esc(m.email)}">${esc(m.name)}</option>`)).join('');
+  return `<div class="fh-card rounded-xl p-3 mb-4 flex items-center gap-2 flex-wrap">
+    <input id="task-input" placeholder="Nueva tarea o próximo paso…" class="flex-1 min-w-[150px] bg-[#0d1528] border border-[#283449] rounded-lg text-sm px-3 py-2 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]" />
+    <select id="task-scope" class="${selCls}"><option value="comun">Común (equipo)</option><option value="individual">Individual</option></select>
+    <select id="task-proj" class="${selCls}">${pjOpts}</select>
+    <select id="task-assignee" class="${selCls}">${asOpts}</select>
+    <input id="task-date" type="date" class="${selCls}" />
+    <select id="task-prio" class="${selCls}"><option value="medium">Media</option><option value="high">Alta</option><option value="urgent">Urgente</option><option value="low">Baja</option></select>
+    <button data-act="add-task2" class="px-4 py-2 rounded-lg bg-[#4edea3] text-[#0b1326] text-sm font-semibold">Añadir</button>
+  </div>`;
+}
+function taskRow(t){
+  const scope=t.scope||'comun';
+  const tipo = scope==='individual' ? ['individual','bg-[#64748b]/20 text-[#94A3B8]'] : ['común','bg-[#4edea3]/15 text-[#4edea3]'];
+  const pj = (t.category && t.category!=='general') ? ((proj(t.category)||{}).name||'') : '';
+  const who = t.assignee ? (TEAM_NAME[t.assignee]||String(t.assignee).split('@')[0]) : '';
+  const pr = PRIOB[t.priority||'medium']||PRIOB.medium;
+  const db = dateBadge(t.dueDate);
+  return `<div class="fh-card rounded-xl p-3 flex items-start gap-3 ${t.completed?'opacity-60':''}">
+    <button data-act="toggle-task" data-id="${esc(t.id)}" class="mt-0.5 w-5 h-5 rounded-md border flex items-center justify-center shrink-0 ${t.completed?'bg-[#4edea3] border-[#4edea3]':'border-[#334155]'}">${t.completed?'<span class="text-[#0b1326] text-xs">✓</span>':''}</button>
+    <div class="flex-1 min-w-0">
+      <p class="text-sm ${t.completed?'line-through text-[#64748b]':'text-[#F8FAFC]'}">${esc(t.title)}</p>
+      <div class="flex items-center gap-1.5 flex-wrap mt-1.5">
+        <span class="text-[9px] px-1.5 py-0.5 rounded-full ${tipo[1]}">${tipo[0]}</span>
+        ${who?`<span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#131b2e] border border-[#283449] text-[#94A3B8]">👤 ${esc(who)}</span>`:''}
+        ${pj?`<span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#8083ff]/10 text-[#c0c1ff]">${esc(pj)}</span>`:''}
+        ${db?`<span class="text-[9px] px-1.5 py-0.5 rounded-full ${db[1]}">📅 ${esc(db[0])}</span>`:''}
+        <span class="text-[9px] px-1.5 py-0.5 rounded-full ${pr[1]}">${pr[0]}</span>
+      </div>
+    </div>
+    <button data-act="del-task" data-id="${esc(t.id)}" class="text-[#64748b] hover:text-[#EF4444] shrink-0 text-sm">🗑</button>
+  </div>`;
+}
 function tareas() {
-  const ts = state.selectedProject ? projTasks(state.selectedProject) : state.tasks;
-  return `<div class="flex items-center justify-between mb-3"><h3 class="font-headline font-bold">Tareas</h3><span class="text-xs text-[#64748b]">${ts.filter(t=>!t.completed).length} pendientes</span></div>
-    <div class="flex items-center gap-2 mb-4"><input id="task-input" placeholder="Nueva tarea…" class="flex-1 bg-[#0d1528] border border-[#283449] rounded-lg text-sm px-3 py-2 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]" /><button data-act="add-task" data-id="${esc(state.selectedProject||'')}" class="p-2 rounded-lg bg-[#8083ff] text-white">＋</button></div>
-    <div class="space-y-1.5">${ts.map(t=>`<div class="flex items-center gap-3 py-2.5 px-3 rounded-xl ${t.completed?'opacity-50':'hover:bg-[#1c2436]'}"><button data-act="toggle-task" data-id="${esc(t.id)}" class="text-lg leading-none ${t.completed?'text-[#4edea3]':PRIO[t.priority||'medium']}">${t.completed?'☑':'○'}</button><span class="text-sm flex-1 truncate ${t.completed?'line-through text-[#64748b]':''}">${esc(t.title)}</span></div>`).join('') || '<p class="text-sm text-[#64748b] text-center py-8">Sin tareas</p>'}</div>`;
+  const meE = me();
+  let ts = state.selectedProject ? projTasks(state.selectedProject) : state.tasks.slice();
+  const f = state.taskFilter;
+  if (f==='mias') ts = ts.filter(t => t.assignee===meE);
+  else if (f==='comunes') ts = ts.filter(t => (t.scope||'comun')==='comun');
+  else if (f==='individuales') ts = ts.filter(t => t.scope==='individual');
+  else if (f==='proyecto') ts = ts.filter(t => t.category && t.category!=='general');
+  if (state.taskDone==='pendientes') ts = ts.filter(t=>!t.completed);
+  else if (state.taskDone==='hechas') ts = ts.filter(t=>t.completed);
+  const pend = (state.selectedProject?projTasks(state.selectedProject):state.tasks).filter(t=>!t.completed).length;
+  const today=new Date().toISOString().slice(0,10);
+  const G={venc:[],hoy:[],prox:[],sinf:[]};
+  ts.forEach(t=>{ const d=t.dueDate?String(t.dueDate).slice(0,10):''; if(!d)G.sinf.push(t); else if(d<today)G.venc.push(t); else if(d===today)G.hoy.push(t); else G.prox.push(t); });
+  const bd=(a,b)=>(a.dueDate||'').localeCompare(b.dueDate||''); G.venc.sort(bd);G.hoy.sort(bd);G.prox.sort(bd);
+  const chip=(id,label,on)=>`<button data-act="tfilter" data-id="${id}" class="px-3 py-1.5 rounded-full text-xs font-semibold ${on?'bg-[#8083ff]/20 text-[#c0c1ff] border border-[#8083ff]/40':'text-[#94A3B8] border border-[#283449] hover:text-[#F8FAFC]'}">${label}</button>`;
+  const dchip=(id,label,on)=>`<button data-act="tdone" data-id="${id}" class="px-3 py-1.5 rounded-full text-xs font-semibold ${on?'bg-[#4edea3]/20 text-[#4edea3] border border-[#4edea3]/40':'text-[#94A3B8] border border-[#283449] hover:text-[#F8FAFC]'}">${label}</button>`;
+  const grp=(title,arr)=>arr.length?`<div class="mb-4"><p class="text-[11px] font-semibold text-[#64748b] uppercase tracking-wider mb-2">${title} (${arr.length})</p><div class="space-y-2">${arr.map(taskRow).join('')}</div></div>`:'';
+  return `<div class="flex items-center justify-between mb-3"><h3 class="font-headline font-bold">Tareas <span class="text-xs text-[#64748b] font-normal">· ${pend} pendiente(s)</span></h3></div>
+    ${addTaskRow()}
+    <div class="flex items-center gap-2 flex-wrap mb-4">
+      ${chip('todas','Todas',f==='todas')}${chip('mias','👤 Mías',f==='mias')}${chip('comunes','Comunes',f==='comunes')}${chip('proyecto','De proyecto',f==='proyecto')}${chip('individuales','Individuales',f==='individuales')}
+      <span class="ml-auto flex gap-2">${dchip('pendientes','Pendientes',state.taskDone==='pendientes')}${dchip('hechas','Hechas',state.taskDone==='hechas')}${dchip('todas','Todas',state.taskDone==='todas')}</span>
+    </div>
+    ${grp('Vencidas',G.venc)}${grp('Hoy',G.hoy)}${grp('Próximas',G.prox)}${grp('Sin fecha',G.sinf)}
+    ${ts.length===0?'<p class="text-sm text-[#64748b] text-center py-8">Sin tareas con este filtro</p>':''}`;
+}
+async function addTaskFull(){
+  const g=id=>document.getElementById(id);
+  const title=((g('task-input')||{}).value||'').trim(); if(!title) return;
+  const project_id=((g('task-proj')||{}).value)||'general';
+  const row={ id:'task-'+uid(), project_id, title, completed:false, stage:null,
+    priority:((g('task-prio')||{}).value)||'medium', due_date:((g('task-date')||{}).value)||null,
+    scope:((g('task-scope')||{}).value)||'comun', assignee:((g('task-assignee')||{}).value)||'',
+    created_by:me(), created_at:new Date().toISOString() };
+  state.tasks.unshift({ ...row, category:project_id, dueDate:row.due_date }); render();
+  try { await sb.from('ws_tasks').insert(row); } catch(_){}
+}
+async function delTask(id){
+  state.tasks=state.tasks.filter(t=>t.id!==id); render();
+  try { await sb.from('ws_tasks').delete().eq('id',id); } catch(_){}
 }
 
 function archivos() {
@@ -432,6 +518,10 @@ document.addEventListener('click', async (e) => {
   if (a==='add-note'){ await addNote(id); return; }
   if (a==='toggle-task'){ await toggleTask(id); return; }
   if (a==='add-task'){ await addTask(id); return; }
+  if (a==='add-task2'){ await addTaskFull(); return; }
+  if (a==='del-task'){ await delTask(id); return; }
+  if (a==='tfilter'){ state.taskFilter=id; render(); return; }
+  if (a==='tdone'){ state.taskDone=id; render(); return; }
   if (a==='stage'){ await setStage(id, el.dataset.stage); return; }
   if (a==='add-mtg'){ await addMeeting(id); return; }
   if (a==='upload'){ pickFile(id||state.selectedProject); return; }
@@ -448,7 +538,7 @@ document.addEventListener('input', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key!=='Enter') return;
   if (e.target.id==='note-input') addNote();
-  if (e.target.id==='task-input') addTask(state.selectedProject);
+  if (e.target.id==='task-input') { if(state.section==='tareas') addTaskFull(); else addTask(state.selectedProject); }
   if (e.target.id==='mtg-title') addMeeting(state.selectedProject);
 });
 
