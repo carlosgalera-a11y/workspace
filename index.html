@@ -240,6 +240,27 @@ async function refreshData(){
   try{ await loadAll(); }catch(_){}
   state.refreshing=false; render();
 }
+/* Re-render preservando el foco/valor del campo que estés escribiendo (para que
+   un cambio en vivo no te borre el comentario a medias). */
+function renderPreserve(){
+  const a=document.activeElement;
+  const info = (a && a.id && ('value' in a)) ? { id:a.id, val:a.value, s:a.selectionStart, e:a.selectionEnd } : null;
+  render();
+  if(info){ const el=document.getElementById(info.id); if(el){ try{ el.value=info.val; el.focus(); if(info.s!=null&&el.setSelectionRange) el.setSelectionRange(info.s,info.e); }catch(_){} } }
+}
+let _liveTimer=null;
+function onLiveChange(){ clearTimeout(_liveTimer); _liveTimer=setTimeout(async()=>{ try{ await loadAll(); renderPreserve(); }catch(_){} }, 400); }
+function subscribeRealtime(){
+  try {
+    if (state._chan || !sb.channel) return;
+    let ch = sb.channel('ws-live');
+    ['ws_projects','ws_tasks','ws_meetings','ws_updates','ws_files'].forEach(t=>{
+      ch = ch.on('postgres_changes', { event:'*', schema:'public', table:t }, onLiveChange);
+    });
+    ch.subscribe((status)=>{ const was=state._live; state._live = (status==='SUBSCRIBED'); if(state.user && was!==state._live) renderPreserve(); });
+    state._chan = ch;
+  } catch(_){}
+}
 
 function urlBar() {
   if (!state.urlBar) return '';
@@ -320,6 +341,7 @@ function topbar() {
     </div>
     <div class="ml-auto flex items-center gap-2 shrink-0">
       ${p&&p.notebook_url?`<a href="${esc(p.notebook_url)}" target="_blank" rel="noopener" class="hidden sm:inline text-[11px] px-3 py-1.5 rounded-lg bg-[#4edea3]/15 text-[#4edea3] font-semibold">Abrir web ↗</a>`:''}
+      ${state._live?`<span class="hidden sm:flex items-center gap-1 text-[10px] text-[#4edea3]" title="Cambios en tiempo real"><span class="w-1.5 h-1.5 rounded-full bg-[#4edea3]"></span>en vivo</span>`:''}
       <button data-act="refresh" title="Actualizar" class="w-9 h-9 rounded-lg bg-[#131b2e] border border-[#283449] text-[#94A3B8] hover:text-[#F8FAFC] flex items-center justify-center ${state.refreshing?'spin':''}">⟳</button>
       <div class="relative">
         <button data-act="notif-toggle" title="Notificaciones" class="w-9 h-9 rounded-lg bg-[#131b2e] border border-[#283449] text-[#94A3B8] hover:text-[#F8FAFC] flex items-center justify-center relative">🔔${nCount?`<span class="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-[#EF4444] text-white text-[9px] font-bold flex items-center justify-center">${nCount>9?'9+':nCount}</span>`:''}</button>
@@ -642,9 +664,9 @@ function renderDenied(email){
     const { data:{ session } } = await sb.auth.getSession();
     if (!session) renderLogin();
     else if (!ALLOWED.has((session.user.email||'').toLowerCase())) renderDenied(session.user.email);
-    else { state.user=session.user; await loadAll(); render(); }
+    else { state.user=session.user; await loadAll(); render(); subscribeRealtime(); }
   } catch(e){ $app.innerHTML = `<div class="min-h-screen flex items-center justify-center p-6 text-center text-[#94A3B8]"><div><p class="text-lg font-headline">No se pudo cargar</p><p class="text-sm mt-2">${esc(String(e&&e.message||e))}</p></div></div>`; }
-  sb.auth.onAuthStateChange((_e,sess)=>{ if(sess&&!state.user){ if(!ALLOWED.has((sess.user.email||'').toLowerCase())){renderDenied(sess.user.email);return;} state.user=sess.user; loadAll().then(render);} else if(!sess&&state.user){state.user=null; renderLogin();} });
+  sb.auth.onAuthStateChange((_e,sess)=>{ if(sess&&!state.user){ if(!ALLOWED.has((sess.user.email||'').toLowerCase())){renderDenied(sess.user.email);return;} state.user=sess.user; loadAll().then(()=>{render(); subscribeRealtime();});} else if(!sess&&state.user){state.user=null; renderLogin();} });
 })();
 
 if ('serviceWorker' in navigator) window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
