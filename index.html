@@ -250,9 +250,12 @@ function renderPreserve(){
 }
 let _liveTimer=null;
 function onLiveChange(){ clearTimeout(_liveTimer); _liveTimer=setTimeout(async()=>{ try{ await loadAll(); renderPreserve(); }catch(_){} }, 400); }
-function subscribeRealtime(){
+async function subscribeRealtime(){
   try {
     if (state._chan || !sb.channel) return;
+    // Pasa el token del usuario al canal Realtime para que el RLS de pareja
+    // deje pasar los cambios (si no, Realtime iría como anon y no llegaría nada).
+    try { const { data:{ session } } = await sb.auth.getSession(); if(session&&session.access_token&&sb.realtime&&sb.realtime.setAuth) sb.realtime.setAuth(session.access_token); } catch(_){}
     let ch = sb.channel('ws-live');
     ['ws_projects','ws_tasks','ws_meetings','ws_updates','ws_files'].forEach(t=>{
       ch = ch.on('postgres_changes', { event:'*', schema:'public', table:t }, onLiveChange);
