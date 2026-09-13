@@ -521,7 +521,7 @@ function projectDashboard(p) {
     <!-- archivos -->
     <div class="fh-card rounded-2xl p-5">
       <div class="flex items-center justify-between mb-3"><h3 class="font-headline font-bold text-sm">📁 Archivos <span class="text-[#64748b] font-normal">· ${fls.length}</span></h3><button data-act="upload" data-id="${esc(p.id)}" class="text-[11px] px-3 py-1.5 rounded-lg bg-[#8083ff] text-white font-semibold ${state.uploading?'opacity-50':''}">${state.uploading?'Subiendo…':'⬆ Subir'}</button></div>
-      <div class="space-y-1.5">${fls.map(f=>`<a href="${esc(f.url||'#')}" target="_blank" rel="noopener" class="flex items-center gap-3 py-2.5 px-3 rounded-xl hover:bg-[#1c2436]"><span class="w-8 h-8 rounded-lg bg-[#8083ff]/15 flex items-center justify-center">📄</span><div class="flex-1 min-w-0"><p class="text-sm truncate">${esc(f.name)}</p><p class="text-[10px] text-[#64748b]">${f.date||''}</p></div><span class="text-[#64748b]">↗</span></a>`).join('') || '<p class="text-sm text-[#64748b] text-center py-4">Sin archivos — pulsa «Subir»</p>'}</div>
+      <div class="space-y-1.5">${fls.map(f=>`<a href="${esc(f.url||'#')}" data-act="open-file" data-path="${esc(f.storage_path||'')}" target="_blank" rel="noopener" class="flex items-center gap-3 py-2.5 px-3 rounded-xl hover:bg-[#1c2436]"><span class="w-8 h-8 rounded-lg bg-[#8083ff]/15 flex items-center justify-center">📄</span><div class="flex-1 min-w-0"><p class="text-sm truncate">${esc(f.name)}</p><p class="text-[10px] text-[#64748b]">${f.date||''}</p></div><span class="text-[#64748b]">↗</span></a>`).join('') || '<p class="text-sm text-[#64748b] text-center py-4">Sin archivos — pulsa «Subir»</p>'}</div>
     </div>
     </div>
     <!-- progreso + estado -->
@@ -663,7 +663,7 @@ async function delTask(id){
 function archivos() {
   const fs = state.selectedProject ? projFiles(state.selectedProject) : state.files;
   return `<div class="flex items-center justify-between mb-3"><h3 class="font-headline font-bold">Archivos</h3><button data-act="upload" data-id="${esc(state.selectedProject||'')}" class="text-[11px] px-3 py-1.5 rounded-lg bg-[#8083ff] text-white font-semibold ${state.uploading?'opacity-50':''}">${state.uploading?'Subiendo…':'⬆ Subir archivo'}</button></div>
-    <div class="space-y-1.5">${fs.map(f=>`<a href="${esc(f.url||'#')}" target="_blank" rel="noopener" class="flex items-center gap-3 py-2.5 px-3 rounded-xl hover:bg-[#1c2436]"><span class="w-8 h-8 rounded-lg bg-[#8083ff]/15 flex items-center justify-center">📄</span><div class="flex-1 min-w-0"><p class="text-sm truncate">${esc(f.name)}</p>${f.folder?`<p class="text-[10px] text-[#64748b]">${esc(f.folder)}</p>`:''}</div><span class="text-[#64748b]">↗</span></a>`).join('') || '<p class="text-sm text-[#64748b] text-center py-8">Sin archivos</p>'}</div>`;
+    <div class="space-y-1.5">${fs.map(f=>`<a href="${esc(f.url||'#')}" data-act="open-file" data-path="${esc(f.storage_path||'')}" target="_blank" rel="noopener" class="flex items-center gap-3 py-2.5 px-3 rounded-xl hover:bg-[#1c2436]"><span class="w-8 h-8 rounded-lg bg-[#8083ff]/15 flex items-center justify-center">📄</span><div class="flex-1 min-w-0"><p class="text-sm truncate">${esc(f.name)}</p>${f.folder?`<p class="text-[10px] text-[#64748b]">${esc(f.folder)}</p>`:''}</div><span class="text-[#64748b]">↗</span></a>`).join('') || '<p class="text-sm text-[#64748b] text-center py-8">Sin archivos</p>'}</div>`;
 }
 
 function avances() {
@@ -726,6 +726,7 @@ document.addEventListener('click', async (e) => {
   if (a==='stage'){ await setStage(id, el.dataset.stage); return; }
   if (a==='add-mtg'){ await addMeeting(id); return; }
   if (a==='add-mtg-global'){ await addMeetingGlobal(); return; }
+  if (a==='open-file'){ const path=el.dataset.path; if(!path) return; e.preventDefault(); try{ const { data, error }=await sb.storage.from('files').createSignedUrl(path,3600); if(error) throw error; window.open(data.signedUrl,'_blank','noopener'); }catch(err){ alert('No se pudo abrir el archivo: '+(err&&err.message||err)); } return; }
   if (a==='upload'){ pickFile(id||state.selectedProject); return; }
 });
 document.addEventListener('change', async (e) => {
