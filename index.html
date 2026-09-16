@@ -39,7 +39,7 @@
 </head>
 <body>
 <div id="app" class="min-h-screen"></div>
-<input type="file" id="hidden-file" style="display:none" />
+<input type="file" id="hidden-file" accept=".pdf,.doc,.docx,.ppt,.pptx,.html,.htm,.md,.markdown,.mp3,.mp4,.zip,image/*,audio/*,video/*,text/html,text/markdown" style="display:none" />
 
 <script>
 /* ══════════════════════════════════════════════════════════════════════
@@ -521,7 +521,7 @@ function projectDashboard(p) {
     <!-- archivos -->
     <div class="fh-card rounded-2xl p-5">
       <div class="flex items-center justify-between mb-3"><h3 class="font-headline font-bold text-sm">📁 Archivos <span class="text-[#64748b] font-normal">· ${fls.length}</span></h3><button data-act="upload" data-id="${esc(p.id)}" class="text-[11px] px-3 py-1.5 rounded-lg bg-[#8083ff] text-white font-semibold ${state.uploading?'opacity-50':''}">${state.uploading?'Subiendo…':'⬆ Subir'}</button></div>
-      <div class="space-y-1.5">${fls.map(f=>`<a href="${esc(f.url||'#')}" data-act="open-file" data-path="${esc(f.storage_path||'')}" target="_blank" rel="noopener" class="flex items-center gap-3 py-2.5 px-3 rounded-xl hover:bg-[#1c2436]"><span class="w-8 h-8 rounded-lg bg-[#8083ff]/15 flex items-center justify-center">📄</span><div class="flex-1 min-w-0"><p class="text-sm truncate">${esc(f.name)}</p><p class="text-[10px] text-[#64748b]">${f.date||''}</p></div><span class="text-[#64748b]">↗</span></a>`).join('') || '<p class="text-sm text-[#64748b] text-center py-4">Sin archivos — pulsa «Subir»</p>'}</div>
+      <div class="space-y-1.5">${fls.map(f=>`<a href="${esc(f.url||'#')}" data-act="open-file" data-path="${esc(f.storage_path||'')}" target="_blank" rel="noopener" class="flex items-center gap-3 py-2.5 px-3 rounded-xl hover:bg-[#1c2436]"><span class="w-8 h-8 rounded-lg bg-[#8083ff]/15 flex items-center justify-center">${fileIcon(f.name)}</span><div class="flex-1 min-w-0"><p class="text-sm truncate">${esc(f.name)}</p><p class="text-[10px] text-[#64748b]">${f.date||''}</p></div><span class="text-[#64748b]">↗</span></a>`).join('') || '<p class="text-sm text-[#64748b] text-center py-4">Sin archivos — pulsa «Subir»</p>'}</div>
     </div>
     </div>
     <!-- progreso + estado -->
@@ -660,10 +660,24 @@ async function delTask(id){
   try { await sb.from('ws_tasks').delete().eq('id',id); } catch(_){}
 }
 
+function fileIcon(name){
+  const n=(name||'').toLowerCase().split('.').pop();
+  if(['png','jpg','jpeg','gif','webp','svg','bmp','heic'].includes(n))return '🖼️';
+  if(['mp3','m4a','wav','ogg','aac','flac'].includes(n))return '🎵';
+  if(['mp4','mov','webm','mkv','avi'].includes(n))return '🎬';
+  if(n==='pdf')return '📕';
+  if(['doc','docx'].includes(n))return '📘';
+  if(['ppt','pptx'].includes(n))return '📙';
+  if(['xls','xlsx','csv'].includes(n))return '📗';
+  if(['html','htm'].includes(n))return '🌐';
+  if(['md','markdown'].includes(n))return '📝';
+  if(['zip','rar','7z'].includes(n))return '🗜️';
+  return '📄';
+}
 function archivos() {
   const fs = state.selectedProject ? projFiles(state.selectedProject) : state.files;
   return `<div class="flex items-center justify-between mb-3"><h3 class="font-headline font-bold">Archivos</h3><button data-act="upload" data-id="${esc(state.selectedProject||'')}" class="text-[11px] px-3 py-1.5 rounded-lg bg-[#8083ff] text-white font-semibold ${state.uploading?'opacity-50':''}">${state.uploading?'Subiendo…':'⬆ Subir archivo'}</button></div>
-    <div class="space-y-1.5">${fs.map(f=>`<a href="${esc(f.url||'#')}" data-act="open-file" data-path="${esc(f.storage_path||'')}" target="_blank" rel="noopener" class="flex items-center gap-3 py-2.5 px-3 rounded-xl hover:bg-[#1c2436]"><span class="w-8 h-8 rounded-lg bg-[#8083ff]/15 flex items-center justify-center">📄</span><div class="flex-1 min-w-0"><p class="text-sm truncate">${esc(f.name)}</p>${f.folder?`<p class="text-[10px] text-[#64748b]">${esc(f.folder)}</p>`:''}</div><span class="text-[#64748b]">↗</span></a>`).join('') || '<p class="text-sm text-[#64748b] text-center py-8">Sin archivos</p>'}</div>`;
+    <div class="space-y-1.5">${fs.map(f=>`<a href="${esc(f.url||'#')}" data-act="open-file" data-path="${esc(f.storage_path||'')}" target="_blank" rel="noopener" class="flex items-center gap-3 py-2.5 px-3 rounded-xl hover:bg-[#1c2436]"><span class="w-8 h-8 rounded-lg bg-[#8083ff]/15 flex items-center justify-center">${fileIcon(f.name)}</span><div class="flex-1 min-w-0"><p class="text-sm truncate">${esc(f.name)}</p>${f.folder?`<p class="text-[10px] text-[#64748b]">${esc(f.folder)}</p>`:''}</div><span class="text-[#64748b]">↗</span></a>`).join('') || '<p class="text-sm text-[#64748b] text-center py-8">Sin archivos</p>'}</div>`;
 }
 
 function avances() {
