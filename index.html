@@ -66,7 +66,7 @@ const pad = (n) => String(n).padStart(2,'0');
 const uid = () => Date.now() + '-' + Math.random().toString(36).slice(2,8);
 
 const state = {
-  user: null, projects: [], tasks: [], events: [], files: [], updates: [],
+  user: null, projects: [], tasks: [], events: [], files: [], updates: [], members: [],
   section: 'overview', selectedProject: null,
   gh: null, ghLoading: false, ghTab: 'commits',
   cal: { m: new Date().getMonth(), y: new Date().getFullYear() },
@@ -76,6 +76,9 @@ const state = {
 };
 const TEAM = [{email:'carlosgalera2roman@gmail.com',name:'Carlos'},{email:'raquelft87@gmail.com',name:'Raquel'}];
 const TEAM_NAME = { 'carlosgalera2roman@gmail.com':'Carlos', 'raquelft87@gmail.com':'Raquel' };
+const OWNER_EMAIL = 'carlosgalera2roman@gmail.com';
+const isOwner = () => me() === OWNER_EMAIL;
+const isMember = (pid, email) => state.members.some(m => m.project_id === pid && m.email === email);
 const selCls = 'bg-[#0d1528] border border-[#283449] rounded-lg text-xs text-[#94A3B8] px-2 py-2 focus:outline-none focus:border-[#8083ff]';
 const PRIOB = { urgent:['urgente','bg-[#EF4444]/20 text-[#EF4444]'], high:['alta','bg-[#F59E0B]/20 text-[#F59E0B]'], medium:['media','bg-[#8083ff]/20 text-[#c0c1ff]'], low:['baja','bg-[#64748b]/20 text-[#94A3B8]'] };
 function dateBadge(d){
@@ -129,14 +132,17 @@ const taskStage = (t) => t.completed ? 'hecho' : (t.stage==='en_curso' ? 'en_cur
 /* ── data (tablas COMPARTIDAS ws_*: RLS de pareja Carlos+Raquel → los dos veis y editáis lo mismo) ── */
 const me = () => (state.user && state.user.email) || '';
 async function loadAll() {
-  const [pr,tk,mt,fi,up] = await Promise.all([
+  const [pr,tk,mt,fi,up,mb] = await Promise.all([
     sb.from('ws_projects').select('*').order('created_at',{ascending:true}),
     sb.from('ws_tasks').select('*').order('created_at',{ascending:false}).limit(500),
     sb.from('ws_meetings').select('*').limit(500),
     sb.from('ws_files').select('*').order('created_at',{ascending:false}).limit(500),
     sb.from('ws_updates').select('*').order('created_at',{ascending:false}).limit(200),
+    sb.from('ws_project_members').select('*'),
   ]);
   state.projects = pr.data || [];
+  state.members = mb.data || [];
+  if (state.selectedProject && !proj(state.selectedProject)) state.selectedProject = null;
   state.tasks = (tk.data||[]).map(t => ({ ...t, category:t.project_id, dueDate:t.due_date }));
   state.events = (mt.data||[]).map(m => ({ id:m.id, title:m.title, date:(m.date||'').slice(0,10), type:'proj:'+m.project_id }));
   state.files = (fi.data||[]).map(f => ({ ...f, folder:((state.projects.find(p=>p.id===f.project_id)||{}).name)||'Workspace', tags:['proj:'+f.project_id] }));
@@ -176,6 +182,28 @@ async function addTask(pid) {
   const row = { id:'task-'+uid(), project_id, title, completed:false, stage:null, priority:'medium', due_date:null, created_by: me(), created_at:new Date().toISOString() };
   state.tasks.unshift({ ...row, category:project_id, dueDate:null }); render();
   try { await sb.from('ws_tasks').insert(row); } catch(_){}
+}
+/* Enlace directo (#proj-xxx) y, para quien solo ve un proyecto, entrar en él sin pasar por la lista. */
+function pickInitialProject(){
+  const h = (location.hash||'').replace(/^#\/?/,'');
+  if (h && proj(h)) { state.selectedProject = h; state.section = 'overview'; return; }
+  if (!isOwner() && state.projects.length === 1) { state.selectedProject = state.projects[0].id; state.section = 'overview'; }
+}
+async function toggleMember(pid, email, on){
+  const p = proj(pid); if (!p) return;
+  const who = TEAM_NAME[email] || email;
+  if (on) {
+    const row = { project_id: pid, email, added_by: me(), created_at: new Date().toISOString() };
+    state.members.push(row); render();
+    const { error } = await sb.from('ws_project_members').upsert(row);
+    if (error) { alert('No se pudo compartir: ' + error.message); await refreshData(); return; }
+    toast(who + ' ya ve «' + p.name + '»');
+  } else {
+    state.members = state.members.filter(m => !(m.project_id === pid && m.email === email)); render();
+    const { error } = await sb.from('ws_project_members').delete().eq('project_id', pid).eq('email', email);
+    if (error) { alert('No se pudo quitar el acceso: ' + error.message); await refreshData(); return; }
+    toast(who + ' ya no ve «' + p.name + '»');
+  }
 }
 async function updateProject(id, patch) {
   const p = proj(id); if(!p) return; Object.assign(p,patch); render();
@@ -291,7 +319,7 @@ async function subscribeRealtime(){
     // deje pasar los cambios (si no, Realtime iría como anon y no llegaría nada).
     try { const { data:{ session } } = await sb.auth.getSession(); if(session&&session.access_token&&sb.realtime&&sb.realtime.setAuth) sb.realtime.setAuth(session.access_token); } catch(_){}
     let ch = sb.channel('ws-live');
-    ['ws_projects','ws_tasks','ws_meetings','ws_updates','ws_files'].forEach(t=>{
+    ['ws_projects','ws_tasks','ws_meetings','ws_updates','ws_files','ws_project_members'].forEach(t=>{
       ch = ch.on('postgres_changes', { event:'*', schema:'public', table:t }, onLiveChange);
     });
     ch.subscribe((status)=>{ const was=state._live; state._live = (status==='SUBSCRIBED'); if(state.user && was!==state._live) renderPreserve(); });
@@ -322,9 +350,9 @@ function sidebar() {
       </div>
       <div class="mb-5">
         <p class="text-[10px] font-semibold text-[#64748b] uppercase tracking-wider mb-2 px-2">Proyectos</p>
-        <button data-act="proj" data-id="" class="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm transition-colors ${!state.selectedProject?'bg-[#8083ff]/15 text-[#c0c1ff]':'text-[#94A3B8] hover:bg-[#1c2436]'}"><span class="w-4 text-center">🗂️</span><span>Todos los proyectos</span></button>
+        ${(isOwner()||state.projects.length>1)?`<button data-act="proj" data-id="" class="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm transition-colors ${!state.selectedProject?'bg-[#8083ff]/15 text-[#c0c1ff]':'text-[#94A3B8] hover:bg-[#1c2436]'}"><span class="w-4 text-center">🗂️</span><span>Todos los proyectos</span></button>`:''}
         ${state.projects.map(pItem).join('')}
-        <button data-act="new-proj" class="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm mt-1 text-[#8083ff] hover:bg-[#8083ff]/10 transition-colors"><span class="w-4 text-center text-base leading-none">＋</span><span>Nuevo proyecto</span></button>
+        ${isOwner()?`<button data-act="new-proj" class="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm mt-1 text-[#8083ff] hover:bg-[#8083ff]/10 transition-colors"><span class="w-4 text-center text-base leading-none">＋</span><span>Nuevo proyecto</span></button>`:''}
       </div>
       <div class="mb-5">
         <p class="text-[10px] font-semibold text-[#64748b] uppercase tracking-wider mb-2 px-2">Espacio</p>
@@ -332,7 +360,8 @@ function sidebar() {
         ${sItem('avances','Avances','🌿',0)}
         ${sItem('reuniones','Reuniones','📅',0)}
         ${sItem('calendario','Calendario','🗓️',0)}
-        ${sItem('tareas','Tareas','✅',pending)}
+        ${sItem('pendientes','Quién tiene qué','👥',pending)}
+        ${sItem('tareas','Tareas','✅',0)}
         ${sItem('archivos','Archivos','📁',0)}
       </div>
       <div class="mb-5">
@@ -345,7 +374,7 @@ function sidebar() {
         <div class="min-w-0 flex-1"><p class="text-xs font-bold text-[#F8FAFC] truncate">${esc(TEAM_NAME[me()]||state.user.email||'Tú')}</p><p class="text-[9px] text-[#64748b] truncate">${esc(state.user.email||'')}</p></div>
         <button data-act="logout" title="Salir" class="text-[#64748b] hover:text-[#EF4444]">⎋</button>
       </div>
-      <p class="text-[10px] text-[#64748b] px-2 mt-2">🔒 Espacio privado · solo Carlos y Raquel</p>
+      <p class="text-[10px] text-[#64748b] px-2 mt-2">🔒 Espacio privado · ${isOwner()?'cada proyecto se comparte desde su ficha':'solo ves los proyectos compartidos contigo'}</p>
     </div>
   </aside>`;
 }
@@ -368,7 +397,7 @@ function notifPanel(){
   return `<div class="absolute right-0 mt-2 w-72 max-h-[70vh] overflow-auto fh-card rounded-2xl z-50 py-1" style="box-shadow:0 12px 40px rgba(0,0,0,.5)"><div class="flex items-center justify-between px-3 py-2 border-b border-[#283449]"><span class="text-sm font-headline font-bold">Notificaciones</span><button data-act="notif-toggle" class="text-[#64748b] hover:text-[#F8FAFC]">✕</button></div>${body}</div>`;
 }
 function topbar() {
-  const label = { overview:'Panel general', reuniones:'Reuniones', avances:'Avances', calendario:'Calendario', tareas:'Tareas', archivos:'Archivos' }[state.section];
+  const label = { overview:'Panel general', reuniones:'Reuniones', avances:'Avances', calendario:'Calendario', pendientes:'Quién tiene qué', tareas:'Tareas', archivos:'Archivos' }[state.section];
   const p = state.selectedProject ? proj(state.selectedProject) : null;
   const title = p ? p.name : label;
   const nCount = myNotifs().count;
@@ -429,6 +458,7 @@ function mainContent() {
   if (state.section==='reuniones') return reunionesGlobal();
   if (state.section==='avances') return avances();
   if (state.section==='calendario') return `<div class="fh-card rounded-2xl p-5 fh-rise">${calendar()}</div>`;
+  if (state.section==='pendientes') return pendientes();
   if (state.section==='tareas') return `<div class="fh-card rounded-2xl p-5 fh-rise">${tareas()}</div>`;
   if (state.section==='archivos') return `<div class="fh-card rounded-2xl p-5 fh-rise">${archivos()}</div>`;
   return '';
@@ -441,13 +471,14 @@ function overview() {
   const card = (icon,label,val) => `<div class="fh-card rounded-2xl p-4"><div class="flex items-center gap-2 mb-2"><span>${icon}</span><span class="text-xs text-[#94A3B8]">${label}</span></div><p class="text-2xl font-headline font-bold">${val}</p></div>`;
   const pcard = (p) => { const done_=projTasks(p.id).filter(t=>t.completed).length, tot=projTasks(p.id).length, st=STATUS[p.status||'active']||STATUS.active;
     return `<div role="button" tabindex="0" data-act="proj" data-id="${esc(p.id)}" class="fh-card rounded-2xl p-4 text-left hover:border-[#4edea3]/50 transition-colors cursor-pointer">
-      <div class="flex items-center justify-between gap-2 mb-2"><span class="font-headline font-bold text-sm truncate">${esc(p.name)}</span><span class="flex items-center gap-1.5 shrink-0"><span class="text-[9px] px-2 py-0.5 rounded-full ${st[1]}">${st[0]}</span><button data-act="del-proj" data-id="${esc(p.id)}" title="Eliminar proyecto" class="w-6 h-6 rounded-md text-[#64748b] hover:text-[#EF4444] hover:bg-[#EF4444]/10 flex items-center justify-center text-xs">🗑</button></span></div>
+      <div class="flex items-center justify-between gap-2 mb-2"><span class="font-headline font-bold text-sm truncate">${esc(p.name)}</span><span class="flex items-center gap-1.5 shrink-0"><span class="text-[9px] px-2 py-0.5 rounded-full ${st[1]}">${st[0]}</span>${isOwner()?`<button data-act="del-proj" data-id="${esc(p.id)}" title="Eliminar proyecto" class="w-6 h-6 rounded-md text-[#64748b] hover:text-[#EF4444] hover:bg-[#EF4444]/10 flex items-center justify-center text-xs">🗑</button>`:''}</span></div>
       <div class="flex items-center gap-2"><div class="flex-1 h-1.5 rounded-full bg-[#283449] overflow-hidden"><div class="h-full bg-[#8083ff]" style="width:${Math.max(0,Math.min(100,p.progress||0))}%"></div></div><span class="text-[10px] text-[#64748b]">${p.progress||0}%</span></div>
       <p class="text-[10px] text-[#64748b] mt-2">${done_}/${tot} tareas · ${projMeetings(p.id).length} reuniones</p>
+      <p class="text-[10px] text-[#94A3B8] mt-1">${TEAM.map(m=>`👤 ${esc(m.name)} <b>${projTasks(p.id).filter(t=>!t.completed&&t.assignee===m.email).length}</b>`).join(' · ')}${isOwner()&&isMember(p.id,'raquelft87@gmail.com')?' · <span class="text-[#4edea3]">compartido</span>':''}</p>
     </div>`; };
   return `<div class="space-y-6 fh-rise">
     <div class="grid grid-cols-3 gap-4">${card('💼','Proyectos',active)}${card('✅','Pendientes',pending)}${card('🎯','Hechas',done)}</div>
-    <div><div class="flex items-center justify-between mb-3"><p class="text-xs font-semibold text-[#64748b] uppercase tracking-wider">Tus proyectos</p><button data-act="new-proj" class="text-[11px] px-3 py-1.5 rounded-lg bg-[#8083ff] text-white font-semibold hover:bg-[#6d70e6]">＋ Nuevo proyecto</button></div><div class="grid grid-cols-1 sm:grid-cols-2 gap-3">${state.projects.map(pcard).join('')||'<p class="text-sm text-[#64748b]">Sin proyectos aún. Pulsa «＋ Nuevo proyecto».</p>'}</div></div>
+    <div><div class="flex items-center justify-between mb-3"><p class="text-xs font-semibold text-[#64748b] uppercase tracking-wider">Tus proyectos</p>${isOwner()?`<button data-act="new-proj" class="text-[11px] px-3 py-1.5 rounded-lg bg-[#8083ff] text-white font-semibold hover:bg-[#6d70e6]">＋ Nuevo proyecto</button>`:''}</div><div class="grid grid-cols-1 sm:grid-cols-2 gap-3">${state.projects.map(pcard).join('')||'<p class="text-sm text-[#64748b]">Sin proyectos aún. Pulsa «＋ Nuevo proyecto».</p>'}</div></div>
     <div class="fh-card rounded-2xl p-5">${calendar()}</div>
   </div>`;
 }
@@ -530,9 +561,10 @@ function projectDashboard(p) {
         <div class="flex items-center gap-2 min-w-0">${p.notebook_url?`<a href="${esc(p.notebook_url)}" target="_blank" rel="noopener" class="text-[11px] px-2.5 py-1 rounded-lg bg-[#4edea3]/15 text-[#4edea3] font-semibold shrink-0">🌐 ${esc((p.notebook_url||'').replace(/^https?:\/\//,'').replace(/\/$/,''))} ↗</a>`:'<span class="text-xs text-[#64748b]">Sin web asociada</span>'}</div>
         <div class="flex items-center gap-2 shrink-0">
           <select data-act="proj-status" data-id="${esc(p.id)}" class="bg-[#0d1528] border border-[#283449] rounded-lg text-xs text-[#94A3B8] px-2 py-1.5 focus:outline-none focus:border-[#8083ff]">${['active','on-hold','completed'].map(s=>`<option value="${s}" ${(p.status||'active')===s?'selected':''}>${STATUS[s][0]}</option>`).join('')}</select>
-          <button data-act="del-proj" data-id="${esc(p.id)}" title="Eliminar proyecto" class="w-8 h-8 rounded-lg bg-[#131b2e] border border-[#283449] text-[#64748b] hover:text-[#EF4444] hover:border-[#EF4444]/50 flex items-center justify-center">🗑</button>
+          ${isOwner()?`<button data-act="del-proj" data-id="${esc(p.id)}" title="Eliminar proyecto" class="w-8 h-8 rounded-lg bg-[#131b2e] border border-[#283449] text-[#64748b] hover:text-[#EF4444] hover:border-[#EF4444]/50 flex items-center justify-center">🗑</button>`:''}
         </div>
       </div>
+      ${isOwner()?`<div class="flex items-center gap-3 flex-wrap mb-4 text-xs"><span class="text-[#94A3B8] shrink-0">Compartido con</span>${TEAM.filter(m=>m.email!==OWNER_EMAIL).map(m=>`<label class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#0d1528] border border-[#283449] cursor-pointer"><input type="checkbox" data-act="share-toggle" data-id="${esc(p.id)}" data-email="${esc(m.email)}" ${isMember(p.id,m.email)?'checked':''} class="accent-[#4edea3]" /><span class="${isMember(p.id,m.email)?'text-[#4edea3]':'text-[#94A3B8]'}">${esc(m.name)}</span></label>`).join('')}<span class="text-[10px] text-[#64748b]">Quien no está marcado no ve este proyecto ni sus tareas.</span></div>`:''}
       <div class="flex items-center gap-3"><span class="text-xs text-[#94A3B8] shrink-0">Progreso</span><input type="range" min="0" max="100" step="5" value="${prog}" data-act="proj-progress" data-id="${esc(p.id)}" class="flex-1" /><span id="prog-label" class="text-sm font-headline font-bold text-[#c0c1ff] w-12 text-right">${prog}%</span></div>
     </div>
     <!-- reuniones -->
@@ -583,7 +615,8 @@ function calendar() {
 }
 
 function addTaskRow(){
-  const pjOpts = ['<option value="">Sin proyecto</option>'].concat(state.projects.map(p=>`<option value="${esc(p.id)}" ${state.selectedProject===p.id?'selected':''}>${esc(p.name)}</option>`)).join('');
+  const only = (!isOwner() && state.projects.length===1) ? state.projects[0].id : null;
+  const pjOpts = (isOwner()?['<option value="">Sin proyecto</option>']:[]).concat(state.projects.map(p=>`<option value="${esc(p.id)}" ${(state.selectedProject===p.id||only===p.id)?'selected':''}>${esc(p.name)}</option>`)).join('');
   const asOpts = ['<option value="">Sin asignar</option>'].concat(TEAM.map(m=>`<option value="${esc(m.email)}">${esc(m.name)}</option>`)).join('');
   return `<div class="fh-card rounded-xl p-3 mb-4 flex items-center gap-2 flex-wrap">
     <input id="task-input" placeholder="Nueva tarea o próximo paso…" class="flex-1 min-w-[150px] bg-[#0d1528] border border-[#283449] rounded-lg text-sm px-3 py-2 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]" />
@@ -660,6 +693,33 @@ async function delTask(id){
   try { await sb.from('ws_tasks').delete().eq('id',id); } catch(_){}
 }
 
+/* «Quién tiene qué»: por cada proyecto, las tareas pendientes de Carlos, de Raquel y sin asignar. */
+function pendientes(){
+  const projs = state.projects.slice().sort((a,b)=>projTasks(b.id).filter(t=>!t.completed).length - projTasks(a.id).filter(t=>!t.completed).length);
+  const col = (title, items, cls) => `<div class="flex-1 min-w-0">
+    <p class="text-[11px] font-semibold ${cls||'text-[#94A3B8]'} mb-2 px-1">${title} <span class="text-[#64748b]">${items.length}</span></p>
+    <div class="space-y-1.5">${items.map(taskCard).join('') || '<p class="text-[11px] text-[#64748b] px-1 py-3">Nada pendiente</p>'}</div>
+  </div>`;
+  const block = (p) => {
+    const ts = projTasks(p.id).filter(t=>!t.completed);
+    const sinAsignar = ts.filter(t=>!t.assignee || !TEAM_NAME[t.assignee]);
+    return `<div class="fh-card rounded-2xl p-5">
+      <div class="flex items-center justify-between gap-2 mb-3">
+        <button data-act="proj" data-id="${esc(p.id)}" class="font-headline font-bold text-sm text-left hover:text-[#4edea3] truncate">${esc(p.name)} ›</button>
+        <span class="text-[10px] text-[#64748b] shrink-0">${ts.length} pendiente(s)</span>
+      </div>
+      <div class="flex flex-col sm:flex-row gap-4">
+        ${TEAM.map(m=>col('👤 '+esc(m.name), ts.filter(t=>t.assignee===m.email), m.email===me()?'text-[#4edea3]':'')).join('')}
+        ${col('Sin asignar', sinAsignar)}
+      </div>
+    </div>`;
+  };
+  return `<div class="space-y-4 fh-rise">
+    <div class="flex items-center justify-between gap-2 flex-wrap"><h3 class="font-headline font-bold">Quién tiene qué</h3><span class="text-[11px] text-[#64748b]">Pendientes por persona en cada proyecto · ▶ en curso · ✓ hecha</span></div>
+    ${projs.map(block).join('') || '<p class="text-sm text-[#64748b] text-center py-8">Sin proyectos</p>'}
+  </div>`;
+}
+
 function fileIcon(name){
   const n=(name||'').toLowerCase().split('.').pop();
   if(['png','jpg','jpeg','gif','webp','svg','bmp','heic'].includes(n))return '🖼️';
@@ -723,7 +783,7 @@ document.addEventListener('click', async (e) => {
   if (a==='notif-toggle'){ state.notifOpen=!state.notifOpen; render(); return; }
   if (a==='notif-close'){ state.notifOpen=false; render(); return; }
   if (a==='sec'){ state.section=id; state.sidebar=false; state.notifOpen=false; render(); if(state.section==='avances'&&!state.gh) loadGithub(); return; }
-  if (a==='proj'){ state.selectedProject=id||null; state.section='overview'; state.sidebar=false; state.notifOpen=false; if(state.gh){state.gh=null;} render(); return; }
+  if (a==='proj'){ state.selectedProject=id||null; state.section='overview'; state.sidebar=false; state.notifOpen=false; if(state.gh){state.gh=null;} try{ history.replaceState(null,'', id?'#'+id:location.pathname); }catch(_){} render(); return; }
   if (a==='new-proj'){ await addProject(); return; }
   if (a==='del-proj'){ await deleteProject(id); return; }
   if (a==='cal-prev'){ if(state.cal.m===0){state.cal.m=11;state.cal.y--;}else state.cal.m--; render(); return; }
@@ -747,6 +807,7 @@ document.addEventListener('change', async (e) => {
   const el = e.target.closest('[data-act]'); if(!el) return;
   if (el.dataset.act==='proj-progress') await updateProject(el.dataset.id,{progress:Number(el.value)});
   if (el.dataset.act==='proj-status') await updateProject(el.dataset.id,{status:el.value});
+  if (el.dataset.act==='share-toggle') await toggleMember(el.dataset.id, el.dataset.email, el.checked);
 });
 document.addEventListener('input', (e) => {
   const el=e.target.closest('[data-act="proj-progress"]'); if(!el) return;
@@ -775,9 +836,9 @@ function renderDenied(email){
     const { data:{ session } } = await sb.auth.getSession();
     if (!session) renderLogin();
     else if (!ALLOWED.has((session.user.email||'').toLowerCase())) renderDenied(session.user.email);
-    else { state.user=session.user; await loadAll(); render(); subscribeRealtime(); }
+    else { state.user=session.user; await loadAll(); pickInitialProject(); render(); subscribeRealtime(); }
   } catch(e){ $app.innerHTML = `<div class="min-h-screen flex items-center justify-center p-6 text-center text-[#94A3B8]"><div><p class="text-lg font-headline">No se pudo cargar</p><p class="text-sm mt-2">${esc(String(e&&e.message||e))}</p></div></div>`; }
-  sb.auth.onAuthStateChange((_e,sess)=>{ if(sess&&!state.user){ if(!ALLOWED.has((sess.user.email||'').toLowerCase())){renderDenied(sess.user.email);return;} state.user=sess.user; loadAll().then(()=>{render(); subscribeRealtime();});} else if(!sess&&state.user){state.user=null; renderLogin();} });
+  sb.auth.onAuthStateChange((_e,sess)=>{ if(sess&&!state.user){ if(!ALLOWED.has((sess.user.email||'').toLowerCase())){renderDenied(sess.user.email);return;} state.user=sess.user; loadAll().then(()=>{pickInitialProject(); render(); subscribeRealtime();});} else if(!sess&&state.user){state.user=null; renderLogin();} });
 })();
 
 if ('serviceWorker' in navigator) window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
