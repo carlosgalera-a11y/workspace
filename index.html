@@ -51,7 +51,7 @@
 const SUPA_URL = 'https://igvadjgjpyuvzailjqwg.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlndmFkamdqcHl1dnphaWxqcXdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NDI3MTAsImV4cCI6MjA4ODAxODcxMH0.eAqKCHDzrkvMTseaBP0I_JICP1owX60-cp3agYqRz4Q';
 const DEFAULT_REPO = 'carlosgalera-a11y/filehub2026';
-const APP_VERSION = 18; // mantener igual que CACHE en sw.js (workspace-vNN)
+const APP_VERSION = 19; // mantener igual que CACHE en sw.js (workspace-vNN)
 // URL propia (dinámica): funciona en github.io/workspace/ Y en el dominio propio.
 const APP_URL = (typeof location !== 'undefined' && location.origin) ? (location.origin + location.pathname) : 'https://filehubworksplace.com/';
 const CAL_URL = 'https://carlosgalera-a11y.github.io/calendario.html';
@@ -851,6 +851,7 @@ function personCards(pid){
     const grow = (g) => `<div class="flex items-start gap-2 py-1 ${g.done?'opacity-50':''}">
         <button data-act="goal-toggle" data-id="${esc(g.id)}" class="mt-0.5 w-4 h-4 rounded border flex items-center justify-center shrink-0 ${g.done?'bg-[#4edea3] border-[#4edea3]':'border-[#334155] hover:border-[#4edea3]'}">${g.done?'<span class="text-[#0b1326] text-[9px]">✓</span>':''}</button>
         <p class="text-[12px] leading-snug flex-1 min-w-0 ${g.done?'line-through text-[#64748b]':''}">${esc(g.title)}${(!pid && g.project_id && proj(g.project_id))?` <span class="text-[9px] text-[#c0c1ff]">· ${esc(proj(g.project_id).name)}</span>`:''}</p>
+        <button data-act="goal-del" data-id="${esc(g.id)}" title="Eliminar objetivo" class="text-[#64748b] hover:text-[#EF4444] text-xs shrink-0">🗑</button>
       </div>`;
     const MAX = 6;
     return `<div class="fh-card rounded-2xl p-4 ${mine?'border-[#4edea3]/40':''}">
@@ -861,6 +862,10 @@ function personCards(pid){
       </div>
       <p class="text-[10px] font-semibold text-[#64748b] uppercase tracking-wider mt-2">🎯 Objetivos de la semana ${goals.length?`<span class="normal-case font-normal">· ${gDone}/${goals.length}</span>`:''}</p>
       <div class="divide-y divide-[#283449]/50">${goals.map(grow).join('') || `<p class="text-[11px] text-[#64748b] py-1.5">Sin objetivos esta semana${goalsMonth.length?` · ${goalsMonth.length} del mes`:''}</p>`}</div>
+      <div class="flex items-center gap-1.5 mt-1.5">
+        <input id="goal-input-p-${esc(mb.email)}" data-email="${esc(mb.email)}" placeholder="＋ Objetivo de la semana para ${esc(mb.name)}… (Enter)" autocomplete="off" class="flex-1 min-w-0 bg-[#0d1528] border border-[#283449] rounded-lg text-[12px] px-2.5 py-1.5 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]" />
+        <button data-act="goal-add-p" data-email="${esc(mb.email)}" class="shrink-0 w-8 h-8 rounded-lg bg-[#8083ff]/20 text-[#c0c1ff] hover:bg-[#8083ff] hover:text-white text-base leading-none">＋</button>
+      </div>
       <p class="text-[10px] font-semibold text-[#64748b] uppercase tracking-wider mt-3">📋 Tareas pendientes</p>
       <div class="divide-y divide-[#283449]/50">${semana.concat(luego).slice(0,MAX).map(trow).join('') || '<p class="text-[11px] text-[#64748b] py-1.5">Nada pendiente 🎉</p>'}</div>
       ${tasks.length>MAX?`<button data-act="sec" data-id="pendientes" class="text-[10px] text-[#8083ff] underline mt-1">+${tasks.length-MAX} más en «Quién tiene qué»</button>`:''}
@@ -944,6 +949,13 @@ async function toggleGoal(id){
 async function delGoal(id){
   state.goals = state.goals.filter(x=>x.id!==id); render();
   try { await sb.from('ws_goals').delete().eq('id',id); } catch(_){}
+}
+async function addGoalFor(email){
+  const inp = document.getElementById('goal-input-p-'+email); const text=(inp&&inp.value||'').trim(); if(!text) return;
+  const p = parseAssist(text); p.kind='goal'; p.assignee = email;
+  if (!p.period) { p.period='week'; p.period_key=isoWeekKey(mondayOf(new Date())); }
+  await createFromAssist(p);
+  const i2 = document.getElementById('goal-input-p-'+email); if (i2) { i2.value=''; i2.focus(); }
 }
 async function addGoal(period){
   const inp = document.getElementById('goal-input-'+period); const text=(inp&&inp.value||'').trim(); if(!text) return;
@@ -1250,6 +1262,7 @@ document.addEventListener('click', async (e) => {
   if (a==='avail-cycle'){ await cycleAvail(el.dataset.email, el.dataset.date); return; }
   if (a==='goal-toggle'){ await toggleGoal(id); return; }
   if (a==='goal-del'){ await delGoal(id); return; }
+  if (a==='goal-add-p'){ await addGoalFor(el.dataset.email); return; }
   if (a==='assist-add'){ await assistAdd(); return; }
   if (a==='cal-who'){ state.calWho=id; render(); return; }
   if (a==='update-app'){ await updateApp(); return; }
@@ -1280,6 +1293,7 @@ document.addEventListener('keydown', (e) => {
   if (e.target.id==='mtg-title') { if(document.getElementById('mtg-proj')) addMeetingGlobal(); else addMeeting(state.selectedProject); }
   if (e.target.id==='assist-input') { e.preventDefault(); assistAdd(); }
   if (e.target.id==='goal-input-week') { e.preventDefault(); addGoal('week'); }
+  if (e.target.id && e.target.id.startsWith('goal-input-p-')) { e.preventDefault(); addGoalFor(e.target.dataset.email); }
   if (e.target.id==='goal-input-month') { e.preventDefault(); addGoal('month'); }
 });
 
