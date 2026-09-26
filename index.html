@@ -51,7 +51,7 @@
 const SUPA_URL = 'https://igvadjgjpyuvzailjqwg.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlndmFkamdqcHl1dnphaWxqcXdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NDI3MTAsImV4cCI6MjA4ODAxODcxMH0.eAqKCHDzrkvMTseaBP0I_JICP1owX60-cp3agYqRz4Q';
 const DEFAULT_REPO = 'carlosgalera-a11y/filehub2026';
-const APP_VERSION = 17; // mantener igual que CACHE en sw.js (workspace-vNN)
+const APP_VERSION = 18; // mantener igual que CACHE en sw.js (workspace-vNN)
 // URL propia (dinámica): funciona en github.io/workspace/ Y en el dominio propio.
 const APP_URL = (typeof location !== 'undefined' && location.origin) ? (location.origin + location.pathname) : 'https://filehubworksplace.com/';
 const CAL_URL = 'https://carlosgalera-a11y.github.io/calendario.html';
@@ -528,6 +528,7 @@ function overview() {
       <p class="text-[10px] text-[#94A3B8] mt-1">${TEAM.map(m=>`👤 ${esc(m.name)} <b>${projTasks(p.id).filter(t=>!t.completed&&t.assignee===m.email).length}</b>`).join(' · ')}${isOwner()&&isMember(p.id,'raquelft87@gmail.com')?' · <span class="text-[#4edea3]">compartido</span>':''}</p>
     </div>`; };
   return `<div class="space-y-6 fh-rise">
+    ${personCards(null)}
     <div class="grid grid-cols-3 gap-4">${card('💼','Proyectos',active)}${card('✅','Pendientes',pending)}${card('🎯','Hechas',done)}</div>
     ${assistBox(null)}
     ${todayBoard(null)}
@@ -581,7 +582,8 @@ function projectDashboard(p) {
   const pend = ts.filter(t=>taskStage(t)==='pendiente'), curso = ts.filter(t=>taskStage(t)==='en_curso'), hecho = ts.filter(t=>taskStage(t)==='hecho');
   const mtgs = projMeetings(p.id), ups = projUpdates(p.id), fls = projFiles(p.id);
   return `<div class="space-y-5 fh-rise">
-    <!-- dashboard del proyecto: asistente, semana de los dos y objetivos -->
+    <!-- dashboard del proyecto: tarjetas por persona, asistente, semana de los dos y objetivos -->
+    ${personCards(p.id)}
     ${assistBox(p.id)}
     ${todayBoard(p.id)}
     ${upcomingTimeline(p.id)}
@@ -824,6 +826,50 @@ function todayBoard(pid){
     <div class="grid" style="grid-template-columns:110px 1fr"><div></div>${hourRuler()}</div>
     <div class="space-y-2">${rows}</div>
     ${TL_LEGEND}
+  </div>`;
+}
+/* Tarjetas por persona: objetivos de la semana y tareas pendientes de cada uno, arriba del todo. */
+function personCards(pid){
+  const wk = isoWeekKey(mondayOf(new Date())); const todayS = isoDate(new Date()); const endWeek = isoDate(addDays(mondayOf(new Date()),6));
+  const card = (mb) => {
+    const mine = mb.email===me();
+    const goals = state.goals.filter(g => g.period==='week' && g.period_key===wk && g.owner===mb.email && (!pid || g.project_id===pid));
+    const goalsMonth = state.goals.filter(g => g.period==='month' && g.period_key===monthKey(new Date()) && g.owner===mb.email && (!pid || g.project_id===pid) && !g.done);
+    let tasks = state.tasks.filter(t => !t.completed && t.assignee===mb.email && (!pid || t.category===pid));
+    const byD = (a,b) => (String(a.dueDate||'9999')+String(a.due_time||'99')).localeCompare(String(b.dueDate||'9999')+String(b.due_time||'99'));
+    tasks.sort(byD);
+    const semana = tasks.filter(t => t.dueDate && String(t.dueDate).slice(0,10) <= endWeek);
+    const luego = tasks.filter(t => !(t.dueDate && String(t.dueDate).slice(0,10) <= endWeek));
+    const gDone = goals.filter(g=>g.done).length;
+    const pj = (t) => (!pid && t.category && t.category!=='general') ? ((proj(t.category)||{}).name||'') : '';
+    const trow = (t) => { const d = String(t.dueDate||'').slice(0,10); const db = dateBadge(d); const late = d && d<todayS;
+      return `<div class="flex items-start gap-2 py-1">
+        <button data-act="stage" data-id="${esc(t.id)}" data-stage="hecho" title="Marcar hecha" class="mt-0.5 w-4 h-4 rounded border border-[#334155] hover:border-[#4edea3] hover:bg-[#4edea3]/20 shrink-0"></button>
+        <div class="flex-1 min-w-0"><p class="text-[12px] leading-snug ${late?'text-[#fca5a5]':'text-[#F8FAFC]'}">${esc(t.title)}</p>
+        <div class="flex items-center gap-1 flex-wrap mt-0.5">${db?`<span class="text-[9px] px-1.5 py-0.5 rounded-full ${db[1]}">${esc(db[0])}${t.due_time?' '+esc(t.due_time):''}</span>`:'<span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#131b2e] border border-[#283449] text-[#64748b]">sin fecha</span>'}${pj(t)?`<span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#8083ff]/10 text-[#c0c1ff]">${esc(pj(t))}</span>`:''}${t.stage==='en_curso'?'<span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#8083ff]/20 text-[#c0c1ff]">en curso</span>':''}</div></div>
+      </div>`; };
+    const grow = (g) => `<div class="flex items-start gap-2 py-1 ${g.done?'opacity-50':''}">
+        <button data-act="goal-toggle" data-id="${esc(g.id)}" class="mt-0.5 w-4 h-4 rounded border flex items-center justify-center shrink-0 ${g.done?'bg-[#4edea3] border-[#4edea3]':'border-[#334155] hover:border-[#4edea3]'}">${g.done?'<span class="text-[#0b1326] text-[9px]">✓</span>':''}</button>
+        <p class="text-[12px] leading-snug flex-1 min-w-0 ${g.done?'line-through text-[#64748b]':''}">${esc(g.title)}${(!pid && g.project_id && proj(g.project_id))?` <span class="text-[9px] text-[#c0c1ff]">· ${esc(proj(g.project_id).name)}</span>`:''}</p>
+      </div>`;
+    const MAX = 6;
+    return `<div class="fh-card rounded-2xl p-4 ${mine?'border-[#4edea3]/40':''}">
+      <div class="flex items-center gap-2 mb-2">
+        <div class="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${mine?'bg-[#4edea3]/25 text-[#4edea3]':'bg-[#8083ff]/25 text-[#c0c1ff]'}">${esc(mb.name[0])}</div>
+        <div class="flex-1 min-w-0"><p class="font-headline font-bold text-sm">${esc(mb.name)}${mine?' <span class="text-[10px] font-normal text-[#4edea3]">(tú)</span>':''}</p><p class="text-[10px] text-[#64748b]">semana ${wk.split('-W')[1]} · ${tasks.length} pendiente(s) · ${goals.length} objetivo(s)</p></div>
+        <span class="text-xl font-headline font-bold ${tasks.length?'text-[#F59E0B]':'text-[#4edea3]'}">${tasks.length}</span>
+      </div>
+      <p class="text-[10px] font-semibold text-[#64748b] uppercase tracking-wider mt-2">🎯 Objetivos de la semana ${goals.length?`<span class="normal-case font-normal">· ${gDone}/${goals.length}</span>`:''}</p>
+      <div class="divide-y divide-[#283449]/50">${goals.map(grow).join('') || `<p class="text-[11px] text-[#64748b] py-1.5">Sin objetivos esta semana${goalsMonth.length?` · ${goalsMonth.length} del mes`:''}</p>`}</div>
+      <p class="text-[10px] font-semibold text-[#64748b] uppercase tracking-wider mt-3">📋 Tareas pendientes</p>
+      <div class="divide-y divide-[#283449]/50">${semana.concat(luego).slice(0,MAX).map(trow).join('') || '<p class="text-[11px] text-[#64748b] py-1.5">Nada pendiente 🎉</p>'}</div>
+      ${tasks.length>MAX?`<button data-act="sec" data-id="pendientes" class="text-[10px] text-[#8083ff] underline mt-1">+${tasks.length-MAX} más en «Quién tiene qué»</button>`:''}
+    </div>`;
+  };
+  const sinAsignar = state.tasks.filter(t => !t.completed && !TEAM_NAME[t.assignee] && (!pid || t.category===pid)).length;
+  return `<div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">${TEAM.map(card).join('')}</div>
+    ${sinAsignar?`<p class="text-[10px] text-[#64748b] mt-2">${sinAsignar} tarea(s) pendientes sin asignar — repártelas en <button data-act="sec" data-id="pendientes" class="text-[#8083ff] underline">Quién tiene qué</button>.</p>`:''}
   </div>`;
 }
 /* Próximos días: línea de tiempo horizontal con reuniones (lila) y tareas con fecha (rojo). */
@@ -1081,6 +1127,7 @@ function goalsRow(pid){
 }
 function planView(){
   return `<div class="space-y-4 fh-rise">
+    ${personCards(null)}
     ${assistBox(null)}
     ${todayBoard(null)}
     ${upcomingTimeline(null)}
