@@ -64,9 +64,16 @@ const MONTHS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto
 const DAYS = ['L','M','X','J','V','S','D'];
 const pad = (n) => String(n).padStart(2,'0');
 const uid = () => Date.now() + '-' + Math.random().toString(36).slice(2,8);
+const isoDate = (d) => d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+const addDays = (d,n) => { const x=new Date(d); x.setDate(x.getDate()+n); return x; };
+const mondayOf = (d) => { const x=new Date(d); x.setHours(0,0,0,0); x.setDate(x.getDate()-((x.getDay()+6)%7)); return x; };
+const isoWeekKey = (d) => { const x=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())); const day=x.getUTCDay()||7; x.setUTCDate(x.getUTCDate()+4-day); const y=x.getUTCFullYear(); return y+'-W'+pad(Math.ceil((((x-Date.UTC(y,0,1))/86400000)+1)/7)); };
+const monthKey = (d) => d.getFullYear()+'-'+pad(d.getMonth()+1);
+const fmtDay = (d) => d.toLocaleDateString('es-ES',{weekday:'short',day:'numeric',month:'short'});
 
 const state = {
-  user: null, projects: [], tasks: [], events: [], files: [], updates: [], members: [],
+  user: null, projects: [], tasks: [], events: [], files: [], updates: [], members: [], goals: [], avail: [],
+  week: mondayOf(new Date()),
   section: 'overview', selectedProject: null,
   gh: null, ghLoading: false, ghTab: 'commits',
   cal: { m: new Date().getMonth(), y: new Date().getFullYear() },
@@ -115,7 +122,7 @@ function welcomeBanner(){
     <span class="text-lg shrink-0">👋</span>
     <div class="flex-1 text-[13px] text-[#F8FAFC] min-w-0">
       <p class="font-semibold">Hola${nm?', '+esc(nm):''}. Este es vuestro espacio de trabajo <b>privado</b> — solo tú y ${esc(otro)}.</p>
-      <p class="text-[#94A3B8] mt-0.5">A la izquierda tienes tus <b>Proyectos</b>. Dentro de cada uno: <b>tablero de tareas</b>, <b>reuniones</b> y <b>comentarios</b> (para avances y problemas). Pulsa 🔔 para ver lo tuyo y ⟳ para refrescar.</p>
+      <p class="text-[#94A3B8] mt-0.5">A la izquierda tienes tus <b>Proyectos</b>. En <b>Plan semanal</b> ves de un vistazo la disponibilidad, las tareas de cada día y los objetivos de la semana y del mes, y el <b>asistente</b> pone en el calendario lo que le escribas. Pulsa 🔔 para ver lo tuyo y ⟳ para refrescar.</p>
     </div>
     <button data-act="welcome-close" class="text-[#64748b] hover:text-[#F8FAFC] shrink-0">✕</button>
   </div>`;
@@ -132,19 +139,23 @@ const taskStage = (t) => t.completed ? 'hecho' : (t.stage==='en_curso' ? 'en_cur
 /* ── data (tablas COMPARTIDAS ws_*: RLS de pareja Carlos+Raquel → los dos veis y editáis lo mismo) ── */
 const me = () => (state.user && state.user.email) || '';
 async function loadAll() {
-  const [pr,tk,mt,fi,up,mb] = await Promise.all([
+  const [pr,tk,mt,fi,up,mb,gl,av] = await Promise.all([
     sb.from('ws_projects').select('*').order('created_at',{ascending:true}),
     sb.from('ws_tasks').select('*').order('created_at',{ascending:false}).limit(500),
     sb.from('ws_meetings').select('*').limit(500),
     sb.from('ws_files').select('*').order('created_at',{ascending:false}).limit(500),
     sb.from('ws_updates').select('*').order('created_at',{ascending:false}).limit(200),
     sb.from('ws_project_members').select('*'),
+    sb.from('ws_goals').select('*').order('created_at',{ascending:true}),
+    sb.from('ws_availability').select('*'),
   ]);
+  state.goals = gl.data || [];
+  state.avail = av.data || [];
   state.projects = pr.data || [];
   state.members = mb.data || [];
   if (state.selectedProject && !proj(state.selectedProject)) state.selectedProject = null;
   state.tasks = (tk.data||[]).map(t => ({ ...t, category:t.project_id, dueDate:t.due_date }));
-  state.events = (mt.data||[]).map(m => ({ id:m.id, title:m.title, date:(m.date||'').slice(0,10), type:'proj:'+m.project_id }));
+  state.events = (mt.data||[]).map(m => ({ id:m.id, title:m.title, date:(m.date||'').slice(0,10), time:m.time||'', type:'proj:'+m.project_id }));
   state.files = (fi.data||[]).map(f => ({ ...f, folder:((state.projects.find(p=>p.id===f.project_id)||{}).name)||'Workspace', tags:['proj:'+f.project_id] }));
   state.updates = up.data || [];
 }
@@ -246,8 +257,15 @@ async function addMeeting(pid) {
   const date=(dateEl&&dateEl.value)||''; const title=(titleEl&&titleEl.value||'').trim();
   if (!date || !title) { return; }
   const row = { id:'evt-'+uid(), project_id:pid, title, date, created_by: me(), created_at:new Date().toISOString() };
-  state.events.push({ id:row.id, title, date, type:'proj:'+pid }); render();
-  try { await sb.from('ws_meetings').insert(row); } catch(e){ alert('No se pudo guardar la reunión: '+(e&&e.message||e)); }
+  state.events.push({ id:row.id, title, date, time:'', type:'proj:'+pid }); render();
+  try { await sb.from('ws_meetings').insert(row); mirrorMeeting(row); } catch(e){ alert('No se pudo guardar la reunión: '+(e&&e.message||e)); }
+}
+/* El dueño ve las reuniones también en su calendario de FileHub (calendar_events, tabla propia). */
+async function mirrorMeeting(row){
+  if (!isOwner() || !state.user || !state.user.id) return;
+  const hhmm = row.time || '09:00';
+  const pn = (proj(row.project_id)||{}).name;
+  try { await sb.from('calendar_events').insert({ id:'ws_'+row.id, user_id:state.user.id, title:(pn?pn+' · ':'')+row.title, start_date:row.date+'T'+hhmm, end_date:row.date+'T'+hhmm, type:'personal' }); } catch(_){}
 }
 function pickFile(pid) {
   $file.value=''; $file.onchange = async () => { const f=$file.files&&$file.files[0]; if(f) await uploadFile(pid,f); };
@@ -319,7 +337,7 @@ async function subscribeRealtime(){
     // deje pasar los cambios (si no, Realtime iría como anon y no llegaría nada).
     try { const { data:{ session } } = await sb.auth.getSession(); if(session&&session.access_token&&sb.realtime&&sb.realtime.setAuth) sb.realtime.setAuth(session.access_token); } catch(_){}
     let ch = sb.channel('ws-live');
-    ['ws_projects','ws_tasks','ws_meetings','ws_updates','ws_files','ws_project_members'].forEach(t=>{
+    ['ws_projects','ws_tasks','ws_meetings','ws_updates','ws_files','ws_project_members','ws_goals','ws_availability'].forEach(t=>{
       ch = ch.on('postgres_changes', { event:'*', schema:'public', table:t }, onLiveChange);
     });
     ch.subscribe((status)=>{ const was=state._live; state._live = (status==='SUBSCRIBED'); if(state.user && was!==state._live) renderPreserve(); });
@@ -357,6 +375,7 @@ function sidebar() {
       <div class="mb-5">
         <p class="text-[10px] font-semibold text-[#64748b] uppercase tracking-wider mb-2 px-2">Espacio</p>
         ${sItem('overview','Panel general','📊',0)}
+        ${sItem('plan','Plan semanal','📆',state.tasks.filter(t=>!t.completed&&t.assignee===me()&&String(t.dueDate||'').slice(0,10)===isoDate(new Date())).length)}
         ${sItem('avances','Avances','🌿',0)}
         ${sItem('reuniones','Reuniones','📅',0)}
         ${sItem('calendario','Calendario','🗓️',0)}
@@ -397,7 +416,7 @@ function notifPanel(){
   return `<div class="absolute right-0 mt-2 w-72 max-h-[70vh] overflow-auto fh-card rounded-2xl z-50 py-1" style="box-shadow:0 12px 40px rgba(0,0,0,.5)"><div class="flex items-center justify-between px-3 py-2 border-b border-[#283449]"><span class="text-sm font-headline font-bold">Notificaciones</span><button data-act="notif-toggle" class="text-[#64748b] hover:text-[#F8FAFC]">✕</button></div>${body}</div>`;
 }
 function topbar() {
-  const label = { overview:'Panel general', reuniones:'Reuniones', avances:'Avances', calendario:'Calendario', pendientes:'Quién tiene qué', tareas:'Tareas', archivos:'Archivos' }[state.section];
+  const label = { overview:'Panel general', plan:'Plan semanal', reuniones:'Reuniones', avances:'Avances', calendario:'Calendario', pendientes:'Quién tiene qué', tareas:'Tareas', archivos:'Archivos' }[state.section];
   const p = state.selectedProject ? proj(state.selectedProject) : null;
   const title = p ? p.name : label;
   const nCount = myNotifs().count;
@@ -450,14 +469,15 @@ async function addMeetingGlobal(){
   if(!pid){ alert('Elige un proyecto para la reunión'); return; }
   if(!date||!title) return;
   const rowdb={ id:'evt-'+uid(), project_id:pid, title, date, created_by:me(), created_at:new Date().toISOString() };
-  state.events.push({ id:rowdb.id, title, date, type:'proj:'+pid }); render();
-  try{ await sb.from('ws_meetings').insert(rowdb); }catch(e){ alert('No se pudo guardar la reunión: '+(e&&e.message||e)); }
+  state.events.push({ id:rowdb.id, title, date, time:'', type:'proj:'+pid }); render();
+  try{ await sb.from('ws_meetings').insert(rowdb); mirrorMeeting(rowdb); }catch(e){ alert('No se pudo guardar la reunión: '+(e&&e.message||e)); }
 }
 function mainContent() {
   if (state.section==='overview') return state.selectedProject ? projectDashboard(proj(state.selectedProject)) : overview();
   if (state.section==='reuniones') return reunionesGlobal();
   if (state.section==='avances') return avances();
   if (state.section==='calendario') return `<div class="fh-card rounded-2xl p-5 fh-rise">${calendar()}</div>`;
+  if (state.section==='plan') return planView();
   if (state.section==='pendientes') return pendientes();
   if (state.section==='tareas') return `<div class="fh-card rounded-2xl p-5 fh-rise">${tareas()}</div>`;
   if (state.section==='archivos') return `<div class="fh-card rounded-2xl p-5 fh-rise">${archivos()}</div>`;
@@ -595,6 +615,7 @@ function taskCard(t) {
     <div class="flex items-center gap-1 flex-wrap mt-1.5">
       <span class="text-[9px] px-1.5 py-0.5 rounded-full ${tipo[1]}">${tipo[0]}</span>
       ${who?`<span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#131b2e] border border-[#283449] text-[#94A3B8]">👤 ${esc(who)}</span>`:''}
+      ${(()=>{ const db=dateBadge(t.dueDate); return db?`<span class="text-[9px] px-1.5 py-0.5 rounded-full ${db[1]}">📅 ${esc(db[0])}${t.due_time?' '+esc(t.due_time):''}</span>`:''; })()}
       <span class="text-[9px] px-1.5 py-0.5 rounded-full ${pr[1]}">${pr[0]}</span>
     </div>
   </div>`;
@@ -604,14 +625,16 @@ function calendar() {
   const { m,y } = state.cal;
   const total=new Date(y,m+1,0).getDate(), offset=(new Date(y,m,1).getDay()+6)%7;
   const today=`${new Date().getFullYear()}-${pad(new Date().getMonth()+1)}-${pad(new Date().getDate())}`;
-  const byDay={}; state.events.forEach(e=>{ if(e.date)(byDay[e.date]=byDay[e.date]||[]).push(e); });
+  const byDay={}; state.events.forEach(e=>{ if(e.date)(byDay[e.date]=byDay[e.date]||[]).push({ title:(e.time?e.time+' ':'')+'📅 '+e.title, cls:'bg-[#4edea3]/15 text-[#4edea3]' }); });
+  state.tasks.forEach(t=>{ const d=String(t.dueDate||'').slice(0,10); if(!d||t.completed) return; const ini=(TEAM_NAME[t.assignee]||'?')[0]; (byDay[d]=byDay[d]||[]).push({ title:(t.due_time?t.due_time+' ':'')+ini+' · '+t.title, cls: t.assignee===me()?'bg-[#8083ff]/25 text-[#c0c1ff]':'bg-[#131b2e] border border-[#283449] text-[#94A3B8]' }); });
+  state.avail.forEach(a=>{ if(a.status&&a.status!=='libre'){ const nm=(TEAM_NAME[a.email]||'?')[0]; (byDay[a.date]=byDay[a.date]||[]).unshift({ title:nm+' '+(AVAIL[a.status]||AVAIL.ocupado)[0].toLowerCase(), cls:(AVAIL[a.status]||AVAIL.ocupado)[1] }); } });
   let cells=''; for(let i=0;i<offset;i++) cells+='<div></div>';
   for(let d=1;d<=total;d++){ const ds=`${y}-${pad(m+1)}-${pad(d)}`, evs=byDay[ds]||[], isT=ds===today;
-    cells+=`<div class="min-h-[64px] p-1.5 rounded-lg border ${isT?'border-[#8083ff] bg-[#8083ff]/10':'border-[#283449]/50'}"><span class="text-xs font-semibold ${isT?'text-[#8083ff]':'text-[#94A3B8]'}">${d}</span>${evs.slice(0,2).map(e=>`<div class="mt-0.5 text-[10px] leading-tight truncate px-1 py-0.5 rounded bg-[#4edea3]/15 text-[#4edea3]">${esc(e.title)}</div>`).join('')}${evs.length>2?`<span class="text-[9px] text-[#64748b]">+${evs.length-2}</span>`:''}</div>`; }
+    cells+=`<div class="min-h-[64px] p-1.5 rounded-lg border ${isT?'border-[#8083ff] bg-[#8083ff]/10':'border-[#283449]/50'}"><span class="text-xs font-semibold ${isT?'text-[#8083ff]':'text-[#94A3B8]'}">${d}</span>${evs.slice(0,3).map(e=>`<div class="mt-0.5 text-[10px] leading-tight truncate px-1 py-0.5 rounded ${e.cls}">${esc(e.title)}</div>`).join('')}${evs.length>3?`<span class="text-[9px] text-[#64748b]">+${evs.length-3}</span>`:''}</div>`; }
   return `<div class="flex items-center justify-between mb-4"><button data-act="cal-prev" class="p-1.5 rounded-lg hover:bg-[#1c2436] text-[#94A3B8]">‹</button><h3 class="font-headline font-bold">${MONTHS[m]} ${y}</h3><button data-act="cal-next" class="p-1.5 rounded-lg hover:bg-[#1c2436] text-[#94A3B8]">›</button></div>
     <div class="grid grid-cols-7 gap-0.5 mb-1">${DAYS.map(d=>`<div class="text-center text-[10px] font-semibold text-[#64748b] py-1">${d}</div>`).join('')}</div>
     <div class="grid grid-cols-7 gap-1">${cells}</div>
-    <p class="text-[10px] text-[#64748b] mt-3 text-center">Las reuniones de tus proyectos aparecen aquí y en <a href="${CAL_URL}" target="_blank" rel="noopener" class="text-[#8083ff] underline">tu calendario ↗</a></p>`;
+    <p class="text-[10px] text-[#64748b] mt-3 text-center">Reuniones 📅, tareas con fecha (C = Carlos, R = Raquel) y disponibilidad. Añade cosas con el asistente del <button data-act="sec" data-id="plan" class="text-[#8083ff] underline">Plan semanal</button>.</p>`;
 }
 
 function addTaskRow(){
@@ -691,6 +714,206 @@ async function addTaskFull(){
 async function delTask(id){
   state.tasks=state.tasks.filter(t=>t.id!==id); render();
   try { await sb.from('ws_tasks').delete().eq('id',id); } catch(_){}
+}
+
+/* ══ Plan semanal: disponibilidad, objetivos por semana/mes y asistente ══ */
+const AVAIL = {
+  libre:   ['Libre',    'bg-[#4edea3]/15 text-[#4edea3]'],
+  manana:  ['Mañanas',  'bg-[#8083ff]/20 text-[#c0c1ff]'],
+  tarde:   ['Tardes',   'bg-[#8083ff]/20 text-[#c0c1ff]'],
+  ocupado: ['Ocupado',  'bg-[#F59E0B]/20 text-[#F59E0B]'],
+  guardia: ['Guardia',  'bg-[#EF4444]/20 text-[#EF4444]'],
+};
+const AVAIL_ORDER = ['libre','manana','tarde','ocupado','guardia'];
+const availOf = (email, d) => state.avail.find(a => a.email===email && a.date===d && (a.slot||'todo')==='todo');
+async function cycleAvail(email, d){
+  if (!(isOwner() || email===me())) { toast('Solo puedes cambiar tu disponibilidad'); return; }
+  const cur = availOf(email, d); const st = cur ? cur.status : 'libre';
+  const next = AVAIL_ORDER[(AVAIL_ORDER.indexOf(st)+1) % AVAIL_ORDER.length];
+  if (cur) { cur.status = next; } else { state.avail.push({ id:'av-'+uid(), email, date:d, slot:'todo', status:next, note:'' }); }
+  render();
+  const row = availOf(email, d);
+  try { const { error } = await sb.from('ws_availability').upsert({ id:row.id, email, date:d, slot:'todo', status:next, note:row.note||'' }, { onConflict:'email,date,slot' }); if (error) throw error; }
+  catch(e){ alert('No se pudo guardar la disponibilidad: '+(e&&e.message||e)); await refreshData(); }
+}
+async function toggleGoal(id){
+  const g = state.goals.find(x=>x.id===id); if(!g) return; g.done=!g.done; render();
+  try { await sb.from('ws_goals').update({ done:g.done }).eq('id',id); } catch(_){}
+}
+async function delGoal(id){
+  state.goals = state.goals.filter(x=>x.id!==id); render();
+  try { await sb.from('ws_goals').delete().eq('id',id); } catch(_){}
+}
+async function addGoal(period){
+  const inp = document.getElementById('goal-input-'+period); const text=(inp&&inp.value||'').trim(); if(!text) return;
+  const p = parseAssist(text); p.kind='goal';
+  if (!p.period) { p.period=period; p.period_key = period==='week' ? isoWeekKey(state.week) : monthKey(addDays(state.week,3)); }
+  await createFromAssist(p); if (inp) inp.value='';
+}
+
+/* Asistente: entiende frases como «reunión con Jesús el jueves 24 a las 13:00 en MediKai»,
+   «para Raquel: infografía de vacunas mañana» u «objetivo esta semana: cerrar la demo». */
+const MON_RE = 'enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre';
+const MON_IDX = { enero:0,febrero:1,marzo:2,abril:3,mayo:4,junio:5,julio:6,agosto:7,septiembre:8,setiembre:8,octubre:9,noviembre:10,diciembre:11 };
+const WD_RE = 'lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo';
+const WD_NAMES = ['domingo','lunes','martes','miercoles','jueves','viernes','sabado'];
+const noAcc = (x) => String(x||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+const reEsc = (x) => String(x).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+function parseAssist(text){
+  let t = ' '+String(text||'').replace(/\s+/g,' ').trim()+' ';
+  const today = new Date(); today.setHours(0,0,0,0);
+  const out = { kind:'task', title:'', date:null, time:null, assignee:me(), project_id:null, period:null, period_key:null };
+  const cut = (re) => { const m = t.match(re); if (m) { t = t.replace(m[0],' '); return m; } return null; };
+  let m;
+  // ¿para quién?
+  const W = '(?<![\\w.\\-\\/@])', Wend = '(?![\\w.\\-\\/@])';  // palabra suelta: no dentro de dominios ni correos
+  for (const mb of TEAM) { const n = reEsc(noAcc(mb.name)); if (cut(new RegExp(W+'(?:para|de|a)\\s+'+n+Wend,'i')) || cut(new RegExp(W+n+'\\s*:','i')) || cut(new RegExp(W+n+Wend,'i'))) out.assignee = mb.email; }
+  if (cut(/\b(?:para\s+m[ií]|yo mismo|m[ií]a|m[ií]o)\b/i)) out.assignee = me();
+  // ¿qué proyecto?
+  for (const p of state.projects) { const n = reEsc(noAcc(p.name)); if (!n) continue; if (cut(new RegExp(W+'(?:en|de|del|para|proyecto)\\s+'+n+Wend,'i')) || cut(new RegExp(W+n+Wend,'i'))) out.project_id = p.id; }
+  if (!out.project_id) out.project_id = state.selectedProject || ((!isOwner() && state.projects.length===1) ? state.projects[0].id : null);
+  // tipo
+  if (/\b(reuni[oó]n|llamada|cita|videollamada|call|quedada)\b/i.test(t)) out.kind = 'meeting';
+  if (cut(/\b(?:objetivo|meta)s?\b\s*:?/i)) out.kind = 'goal';
+  // periodo (objetivos)
+  if (cut(/\besta semana\b/i)) { out.period='week'; out.period_key=isoWeekKey(today); }
+  else if (cut(/\b(?:la\s+)?semana que viene\b|\bla pr[oó]xima semana\b|\bpr[oó]xima semana\b/i)) { out.period='week'; out.period_key=isoWeekKey(addDays(today,7)); }
+  else if (cut(/\beste mes\b/i)) { out.period='month'; out.period_key=monthKey(today); }
+  else if (cut(/\b(?:el\s+)?mes que viene\b|\bel pr[oó]ximo mes\b|\bpr[oó]ximo mes\b/i)) { out.period='month'; out.period_key=monthKey(new Date(today.getFullYear(),today.getMonth()+1,1)); }
+  else if ((m = cut(new RegExp('\\b(?:en|para|durante)\\s+('+MON_RE+')\\b','i')))) { const mi=MON_IDX[noAcc(m[1])]; let y=today.getFullYear(); if (mi<today.getMonth()) y++; out.period='month'; out.period_key=y+'-'+pad(mi+1); }
+  if (out.period && out.kind==='task') out.kind = 'goal';
+  // hora
+  if ((m = cut(/\b(?:a\s+las?|a\s+la)\s+(\d{1,2})(?:[:.h](\d{2}))?\s*(?:h\b|horas\b)?/i)) || (m = cut(/\b(\d{1,2})[:.](\d{2})\s*h?\b/)) || (m = cut(/\b(\d{1,2})\s*h\b/i))) { out.time = pad(Math.min(23,+m[1]))+':'+pad(m[2]?+m[2]:0); }
+  // fecha
+  // Sin año: si la fecha ya pasó hace más de 2 meses, se entiende que es del año que viene.
+  const fromDM = (d,mi,y) => { const dt = new Date(y!=null?y:today.getFullYear(), mi, d); if (y==null && dt < addDays(today,-60)) dt.setFullYear(dt.getFullYear()+1); return dt; };
+  if (cut(/\bpasado ma[nñ]ana\b/i)) out.date = addDays(today,2);
+  else if (cut(/\bma[nñ]ana\b/i)) out.date = addDays(today,1);
+  else if (cut(/\bhoy\b/i)) out.date = today;
+  else if ((m = cut(/\b(\d{1,2})[\/-](\d{1,2})(?:[\/-](\d{2,4}))?\b/))) { const y = m[3] ? (+m[3]<100 ? 2000+ +m[3] : +m[3]) : null; out.date = fromDM(+m[1], +m[2]-1, y); }
+  else if ((m = cut(new RegExp('\\b(?:el\\s+|d[ií]a\\s+)?(\\d{1,2})\\s+(?:de\\s+)?('+MON_RE+')(?:\\s+(?:de\\s+)?(\\d{4}))?\\b','i')))) out.date = fromDM(+m[1], MON_IDX[noAcc(m[2])], m[3]?+m[3]:null);
+  else if ((m = cut(new RegExp('\\b(?:el\\s+|este\\s+|el\\s+pr[oó]ximo\\s+|pr[oó]ximo\\s+)?('+WD_RE+')(\\s+que\\s+viene)?\\b','i')))) { const wd = WD_NAMES.indexOf(noAcc(m[1])); let diff = (wd - today.getDay() + 7) % 7; if (m[2] && diff===0) diff = 7; out.date = addDays(today, diff); }
+  else if ((m = cut(/\b(?:el|d[ií]a)\s+(\d{1,2})\b/i))) { const d=+m[1]; let dt = new Date(today.getFullYear(), today.getMonth(), d); if (dt<today) dt = new Date(today.getFullYear(), today.getMonth()+1, d); out.date = dt; }
+  if (out.date) cut(new RegExp('\\b(?:el\\s+)?('+WD_RE+')\\b','i'));
+  if (out.kind==='meeting' && !out.date) out.date = today;
+  // título limpio
+  t = t.replace(/\b(a[nñ][aá]de(?:me)?|a[nñ]adir|ap[uú]nta(?:me)?|apuntar|crea(?:r|me)?|pon(?:me)?|poner|agenda(?:r|me)?|nueva|nuevo|tarea|recu[eé]rdame|recordar|programa(?:r)?|planifica(?:r)?)\b/gi,' ');
+  t = t.replace(/\s+/g,' ').replace(/^\s*[:\-–,.]+\s*/,'').replace(/\s*[:\-–,.]+\s*$/,'').trim();
+  t = t.replace(/^(?:que|de|el|la|una?)\s+/i,'').replace(/\s+(?:para|el|la|los|las|un|una|de|del|en|a)$/i,'').trim();
+  out.title = t ? t.charAt(0).toUpperCase()+t.slice(1) : '';
+  return out;
+}
+function assistSummary(p){
+  if (!p.title) return '';
+  const who = TEAM_NAME[p.assignee] || p.assignee || '';
+  const pj = p.project_id ? ((proj(p.project_id)||{}).name||'') : '';
+  const when = p.date ? fmtDay(p.date) + (p.time ? ' '+p.time : '') : (p.kind==='task' ? 'sin fecha' : '');
+  const per = p.period==='week' ? 'semana '+p.period_key.split('-W')[1] : p.period==='month' ? MONTHS[+p.period_key.split('-')[1]-1] : '';
+  const kind = p.kind==='meeting' ? '📅 Reunión' : p.kind==='goal' ? '🎯 Objetivo' : '📋 Tarea';
+  return [kind+' «'+p.title+'»', who?'👤 '+who:'', p.kind==='goal'?per:when, pj].filter(Boolean).join(' · ');
+}
+async function createFromAssist(p){
+  if (!p.title) { toast('Escribe qué quieres añadir'); return; }
+  const now = new Date().toISOString();
+  if (p.kind==='goal') {
+    if (!p.period) { p.period='week'; p.period_key=isoWeekKey(state.week); }
+    const row = { id:'goal-'+uid(), project_id:p.project_id||'', title:p.title, period:p.period, period_key:p.period_key, owner:p.assignee||'', done:false, created_by:me(), created_at:now };
+    state.goals.push(row); render();
+    const { error } = await sb.from('ws_goals').insert(row); if (error) { alert('No se pudo guardar el objetivo: '+error.message); await refreshData(); return; }
+    toast('🎯 Objetivo añadido'); return;
+  }
+  const d = p.date ? isoDate(p.date) : null;
+  if (p.kind==='meeting') {
+    const pid = p.project_id || (state.projects[0]||{}).id || 'general';
+    const row = { id:'evt-'+uid(), project_id:pid, title:p.title, date:d, time:p.time||null, created_by:me(), created_at:now };
+    state.events.push({ id:row.id, title:row.title, date:d, time:row.time||'', type:'proj:'+pid }); render();
+    const { error } = await sb.from('ws_meetings').insert(row); if (error) { alert('No se pudo guardar la reunión: '+error.message); await refreshData(); return; }
+    mirrorMeeting(row); toast('📅 Reunión en el calendario'); return;
+  }
+  const pid = p.project_id || 'general';
+  const row = { id:'task-'+uid(), project_id:pid, title:p.title, completed:false, stage:null, priority:'medium', due_date:d, due_time:p.time||null, scope:p.assignee?'individual':'comun', assignee:p.assignee||'', created_by:me(), created_at:now };
+  state.tasks.unshift({ ...row, category:pid, dueDate:d }); render();
+  const { error } = await sb.from('ws_tasks').insert(row); if (error) { alert('No se pudo guardar la tarea: '+error.message); await refreshData(); return; }
+  toast(d ? '📋 Tarea en el calendario' : '📋 Tarea añadida');
+}
+async function assistAdd(){
+  const inp = document.getElementById('assist-input'); const text=(inp&&inp.value||'').trim(); if(!text) return;
+  await createFromAssist(parseAssist(text));
+  const i2 = document.getElementById('assist-input'); if (i2) { i2.value=''; i2.focus(); }
+  const pv = document.getElementById('assist-preview'); if (pv) pv.textContent='';
+}
+function assistBox(){
+  return `<div class="fh-card rounded-2xl p-4 border-[#8083ff]/40">
+    <div class="flex items-center gap-2 mb-2"><span>🪄</span><h3 class="font-headline font-bold text-sm">Asistente</h3><span class="text-[10px] text-[#64748b]">escribe en tu idioma y lo pongo en el calendario</span></div>
+    <div class="flex items-center gap-2">
+      <input id="assist-input" placeholder="p. ej. «reunión con Jesús el jueves 24 a las 13:00» · «para Raquel: infografía vacunas mañana» · «objetivo esta semana: cerrar demo»" class="flex-1 min-w-0 bg-[#0d1528] border border-[#283449] rounded-xl text-sm px-3.5 py-2.5 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]" autocomplete="off" />
+      <button data-act="assist-add" class="shrink-0 px-4 py-2.5 rounded-xl bg-[#8083ff] text-white text-sm font-semibold hover:bg-[#6d70e6]">Añadir</button>
+    </div>
+    <p id="assist-preview" class="text-[11px] text-[#c0c1ff] mt-2 min-h-[16px]"></p>
+    <p class="text-[10px] text-[#64748b] mt-1">Entiende: hoy · mañana · el jueves · 24 de octubre · 3/10 · a las 13:00 · para Raquel · en MediKai · esta semana / este mes (objetivos) · «reunión» crea una cita.</p>
+  </div>`;
+}
+function goalsBox(period, key, title){
+  const gs = state.goals.filter(g => g.period===period && g.period_key===key);
+  const done = gs.filter(g=>g.done).length;
+  const row = (g) => { const pj = g.project_id ? ((proj(g.project_id)||{}).name||'') : ''; const who = g.owner ? (TEAM_NAME[g.owner]||g.owner.split('@')[0]) : '';
+    return `<div class="flex items-start gap-2 py-1.5 ${g.done?'opacity-60':''}">
+      <button data-act="goal-toggle" data-id="${esc(g.id)}" class="mt-0.5 w-5 h-5 rounded-md border flex items-center justify-center shrink-0 ${g.done?'bg-[#4edea3] border-[#4edea3]':'border-[#334155]'}">${g.done?'<span class="text-[#0b1326] text-xs">✓</span>':''}</button>
+      <div class="flex-1 min-w-0"><p class="text-sm ${g.done?'line-through text-[#64748b]':''}">${esc(g.title)}</p><div class="flex gap-1 flex-wrap mt-0.5">${who?`<span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#131b2e] border border-[#283449] text-[#94A3B8]">👤 ${esc(who)}</span>`:''}${pj?`<span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#8083ff]/10 text-[#c0c1ff]">${esc(pj)}</span>`:''}</div></div>
+      <button data-act="goal-del" data-id="${esc(g.id)}" class="text-[#64748b] hover:text-[#EF4444] text-sm shrink-0">🗑</button>
+    </div>`; };
+  return `<div class="fh-card rounded-2xl p-4">
+    <div class="flex items-center justify-between mb-2"><h3 class="font-headline font-bold text-sm">🎯 ${title}</h3><span class="text-[10px] text-[#64748b]">${done}/${gs.length} hechos</span></div>
+    ${gs.length?`<div class="h-1.5 rounded-full bg-[#283449] overflow-hidden mb-2"><div class="h-full bg-[#4edea3]" style="width:${gs.length?Math.round(done*100/gs.length):0}%"></div></div>`:''}
+    <div class="divide-y divide-[#283449]/60">${gs.map(row).join('') || '<p class="text-[11px] text-[#64748b] py-3 text-center">Sin objetivos aún</p>'}</div>
+    <input id="goal-input-${period}" placeholder="Nuevo objetivo… (Enter) · puedes poner «para Raquel» o el proyecto" class="w-full mt-2 bg-[#0d1528] border border-[#283449] rounded-lg text-sm px-3 py-2 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]" autocomplete="off" />
+  </div>`;
+}
+function planView(){
+  const ws = state.week; const days = [0,1,2,3,4,5,6].map(i=>addDays(ws,i)); const todayS = isoDate(new Date());
+  const wk = isoWeekKey(ws), mk = monthKey(days[3]);
+  const monthName = MONTHS[days[3].getMonth()] + ' ' + days[3].getFullYear();
+  const rango = days[0].toLocaleDateString('es-ES',{day:'numeric',month:'short'}) + ' – ' + days[6].toLocaleDateString('es-ES',{day:'numeric',month:'short'});
+  const tasksOn = (d,email) => state.tasks.filter(t=>!t.completed && t.assignee===email && String(t.dueDate||'').slice(0,10)===d).sort((a,b)=>String(a.due_time||'99').localeCompare(String(b.due_time||'99')));
+  const mtgOn = (d) => state.events.filter(e=>e.date===d).sort((a,b)=>String(a.time||'99').localeCompare(String(b.time||'99')));
+  const head = days.map(d=>{ const ds=isoDate(d); const isT=ds===todayS; return `<div class="px-2 py-2 text-center rounded-t-lg ${isT?'bg-[#8083ff]/15':''}"><p class="text-[10px] uppercase tracking-wider ${isT?'text-[#c0c1ff]':'text-[#64748b]'}">${DAYS[(d.getDay()+6)%7]}</p><p class="font-headline font-bold ${isT?'text-[#c0c1ff]':'text-[#F8FAFC]'}">${d.getDate()}</p></div>`; }).join('');
+  const personRow = (mb) => {
+    const mine = mb.email===me();
+    const cells = days.map(d=>{ const ds=isoDate(d); const av=availOf(mb.email,ds); const st=(av&&av.status)||'libre'; const A=AVAIL[st]||AVAIL.libre; const editable = isOwner()||mine;
+      const ts = tasksOn(ds, mb.email);
+      return `<div class="p-1.5 min-h-[96px] border-l border-[#283449]/50 ${ds===todayS?'bg-[#8083ff]/5':''}">
+        <button data-act="avail-cycle" data-email="${esc(mb.email)}" data-date="${ds}" title="${editable?'Pulsa para cambiar':'Disponibilidad de '+esc(mb.name)}" class="w-full text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${A[1]} ${editable?'':'cursor-default'}">${A[0]}</button>
+        <div class="space-y-1 mt-1.5">${ts.map(t=>`<button data-act="stage" data-id="${esc(t.id)}" data-stage="hecho" title="Marcar hecha" class="w-full text-left text-[10px] leading-tight px-1.5 py-1 rounded-md ${mine?'bg-[#8083ff]/20 text-[#F8FAFC]':'bg-[#131b2e] border border-[#283449] text-[#94A3B8]'} hover:line-through">${t.due_time?`<span class="text-[#c0c1ff]">${esc(t.due_time)}</span> `:''}${esc(t.title)}</button>`).join('')}</div>
+      </div>`; }).join('');
+    const nWeek = days.reduce((n,d)=>n+tasksOn(isoDate(d),mb.email).length,0);
+    return `<div class="grid" style="grid-template-columns:110px repeat(7,minmax(0,1fr))">
+      <div class="p-2 flex flex-col justify-start"><p class="text-sm font-headline font-bold ${mine?'text-[#4edea3]':''}">${esc(mb.name)}</p><p class="text-[10px] text-[#64748b]">${nWeek} tarea(s)</p></div>${cells}
+    </div>`;
+  };
+  const mtgRow = `<div class="grid border-t border-[#283449]" style="grid-template-columns:110px repeat(7,minmax(0,1fr))">
+    <div class="p-2"><p class="text-sm font-headline font-bold">📅 Reuniones</p></div>
+    ${days.map(d=>{ const ds=isoDate(d); const ms=mtgOn(ds); return `<div class="p-1.5 min-h-[44px] border-l border-[#283449]/50 space-y-1">${ms.map(m=>`<div class="text-[10px] leading-tight px-1.5 py-1 rounded-md bg-[#4edea3]/15 text-[#4edea3]">${m.time?esc(m.time)+' ':''}${esc(m.title)}</div>`).join('')}</div>`; }).join('')}
+  </div>`;
+  const sinFecha = state.tasks.filter(t=>!t.completed && !t.dueDate);
+  return `<div class="space-y-4 fh-rise">
+    ${assistBox()}
+    <div class="fh-card rounded-2xl p-4">
+      <div class="flex items-center justify-between gap-2 flex-wrap mb-3">
+        <div class="flex items-center gap-2"><button data-act="plan-prev" class="w-8 h-8 rounded-lg bg-[#0d1528] border border-[#283449] text-[#94A3B8]">‹</button><button data-act="plan-today" class="px-3 h-8 rounded-lg bg-[#0d1528] border border-[#283449] text-[#94A3B8] text-xs">Hoy</button><button data-act="plan-next" class="w-8 h-8 rounded-lg bg-[#0d1528] border border-[#283449] text-[#94A3B8]">›</button></div>
+        <div class="text-right"><h3 class="font-headline font-bold">Semana ${wk.split('-W')[1]} · ${rango}</h3><p class="text-[10px] text-[#64748b]">Pulsa la disponibilidad para cambiarla (Libre → Mañanas → Tardes → Ocupado → Guardia). Pulsa una tarea para darla por hecha.</p></div>
+      </div>
+      <div class="overflow-x-auto"><div class="min-w-[760px]">
+        <div class="grid border-b border-[#283449]" style="grid-template-columns:110px repeat(7,minmax(0,1fr))"><div class="p-2 text-[10px] text-[#64748b] uppercase tracking-wider self-end">Persona / día</div>${head}</div>
+        ${TEAM.map(personRow).join('')}
+        ${mtgRow}
+      </div></div>
+      ${sinFecha.length?`<p class="text-[10px] text-[#64748b] mt-3">${sinFecha.length} tarea(s) pendientes sin fecha — están en <button data-act="sec" data-id="pendientes" class="text-[#8083ff] underline">Quién tiene qué</button>. Dales día con el asistente («… el martes»).</p>`:''}
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      ${goalsBox('week', wk, 'Objetivos de la semana '+wk.split('-W')[1])}
+      ${goalsBox('month', mk, 'Objetivos de '+monthName)}
+    </div>
+  </div>`;
 }
 
 /* «Quién tiene qué»: por cada proyecto, las tareas pendientes de Carlos, de Raquel y sin asignar. */
@@ -796,6 +1019,13 @@ document.addEventListener('click', async (e) => {
   if (a==='add-task2'){ await addTaskFull(); return; }
   if (a==='del-task'){ await delTask(id); return; }
   if (a==='tfilter'){ state.taskFilter=id; render(); return; }
+  if (a==='plan-prev'){ state.week=addDays(state.week,-7); render(); return; }
+  if (a==='plan-next'){ state.week=addDays(state.week,7); render(); return; }
+  if (a==='plan-today'){ state.week=mondayOf(new Date()); render(); return; }
+  if (a==='avail-cycle'){ await cycleAvail(el.dataset.email, el.dataset.date); return; }
+  if (a==='goal-toggle'){ await toggleGoal(id); return; }
+  if (a==='goal-del'){ await delGoal(id); return; }
+  if (a==='assist-add'){ await assistAdd(); return; }
   if (a==='tdone'){ state.taskDone=id; render(); return; }
   if (a==='stage'){ await setStage(id, el.dataset.stage); return; }
   if (a==='add-mtg'){ await addMeeting(id); return; }
@@ -810,6 +1040,7 @@ document.addEventListener('change', async (e) => {
   if (el.dataset.act==='share-toggle') await toggleMember(el.dataset.id, el.dataset.email, el.checked);
 });
 document.addEventListener('input', (e) => {
+  if (e.target.id==='assist-input') { const pv=document.getElementById('assist-preview'); if(pv){ try{ pv.textContent = e.target.value.trim() ? assistSummary(parseAssist(e.target.value)) : ''; }catch(_){ pv.textContent=''; } } return; }
   const el=e.target.closest('[data-act="proj-progress"]'); if(!el) return;
   const lbl=document.getElementById('prog-label'); if(lbl) lbl.textContent=el.value+'%';
 });
@@ -819,6 +1050,9 @@ document.addEventListener('keydown', (e) => {
   if (e.target.id==='note-input') { if(e.shiftKey) return; e.preventDefault(); addNote(state.selectedProject); return; }
   if (e.target.id==='task-input') { if(document.getElementById('task-scope')) addTaskFull(); else addTask(state.selectedProject); }
   if (e.target.id==='mtg-title') { if(document.getElementById('mtg-proj')) addMeetingGlobal(); else addMeeting(state.selectedProject); }
+  if (e.target.id==='assist-input') { e.preventDefault(); assistAdd(); }
+  if (e.target.id==='goal-input-week') { e.preventDefault(); addGoal('week'); }
+  if (e.target.id==='goal-input-month') { e.preventDefault(); addGoal('month'); }
 });
 
 /* ── boot ── */
