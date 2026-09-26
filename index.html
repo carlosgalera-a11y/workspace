@@ -51,6 +51,7 @@
 const SUPA_URL = 'https://igvadjgjpyuvzailjqwg.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlndmFkamdqcHl1dnphaWxqcXdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NDI3MTAsImV4cCI6MjA4ODAxODcxMH0.eAqKCHDzrkvMTseaBP0I_JICP1owX60-cp3agYqRz4Q';
 const DEFAULT_REPO = 'carlosgalera-a11y/filehub2026';
+const APP_VERSION = 15; // mantener igual que CACHE en sw.js (workspace-vNN)
 // URL propia (dinámica): funciona en github.io/workspace/ Y en el dominio propio.
 const APP_URL = (typeof location !== 'undefined' && location.origin) ? (location.origin + location.pathname) : 'https://filehubworksplace.com/';
 const CAL_URL = 'https://carlosgalera-a11y.github.io/calendario.html';
@@ -73,7 +74,7 @@ const fmtDay = (d) => d.toLocaleDateString('es-ES',{weekday:'short',day:'numeric
 
 const state = {
   user: null, projects: [], tasks: [], events: [], files: [], updates: [], members: [], goals: [], avail: [],
-  week: mondayOf(new Date()),
+  week: mondayOf(new Date()), calWho: 'todos', updateAvail: false,
   section: 'overview', selectedProject: null,
   gh: null, ghLoading: false, ghTab: 'commits',
   cal: { m: new Date().getMonth(), y: new Date().getFullYear() },
@@ -294,6 +295,22 @@ async function shareUrl() {
   if (navigator.share) { try { await navigator.share({ title:'Workspace', url:APP_URL }); } catch(_){} }
   else copyUrl();
 }
+/* Fuerza la actualización de la PWA instalada: quita el service worker y las cachés y recarga. */
+async function updateApp(){
+  toast('Actualizando la app…');
+  try {
+    if ('serviceWorker' in navigator) { const regs = await navigator.serviceWorker.getRegistrations(); for (const r of regs) await r.unregister(); }
+    if (window.caches) { const keys = await caches.keys(); await Promise.all(keys.map(k => caches.delete(k))); }
+  } catch(_){}
+  location.replace(location.pathname + '?v=' + Date.now() + location.hash);
+}
+async function checkUpdate(){
+  try {
+    const txt = await fetch('sw.js?cb=' + Date.now(), { cache:'no-store' }).then(r => r.text());
+    const m = txt.match(/workspace-v(\d+)/);
+    if (m && +m[1] !== APP_VERSION) { state.updateAvail = +m[1]; if (state.user) renderPreserve(); }
+  } catch(_){}
+}
 function toast(msg){ const t=document.createElement('div'); t.textContent=msg; t.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#8083ff;color:#fff;padding:10px 18px;border-radius:12px;z-index:999;font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,.4)'; document.body.appendChild(t); setTimeout(()=>t.remove(),1800); }
 
 /* ══ render ══ */
@@ -393,6 +410,7 @@ function sidebar() {
         <div class="min-w-0 flex-1"><p class="text-xs font-bold text-[#F8FAFC] truncate">${esc(TEAM_NAME[me()]||state.user.email||'Tú')}</p><p class="text-[9px] text-[#64748b] truncate">${esc(state.user.email||'')}</p></div>
         <button data-act="logout" title="Salir" class="text-[#64748b] hover:text-[#EF4444]">⎋</button>
       </div>
+      <button data-act="update-app" class="w-full mt-2 flex items-center justify-center gap-2 px-2 py-2 rounded-lg text-xs font-semibold ${state.updateAvail?'bg-[#4edea3] text-[#0b1326]':'bg-[#131b2e] border border-[#283449] text-[#94A3B8] hover:text-[#F8FAFC]'}">${state.updateAvail?'⬆ Hay versión nueva · actualizar':'⟳ Actualizar app'} <span class="opacity-60 font-normal">v${APP_VERSION}</span></button>
       <p class="text-[10px] text-[#64748b] px-2 mt-2">🔒 Espacio privado · ${isOwner()?'cada proyecto se comparte desde su ficha':'solo ves los proyectos compartidos contigo'}</p>
     </div>
   </aside>`;
@@ -420,7 +438,7 @@ function topbar() {
   const p = state.selectedProject ? proj(state.selectedProject) : null;
   const title = p ? p.name : label;
   const nCount = myNotifs().count;
-  return `<header class="sticky top-0 z-30 backdrop-blur-md bg-[#0b1326]/85 border-b border-[#283449] px-4 md:px-6 py-3 flex items-center gap-3">
+  return `${state.updateAvail?`<div class="flex items-center gap-2 px-4 py-2 bg-[#4edea3]/10 border-b border-[#4edea3]/30 text-[12px]"><span>⬆</span><span class="flex-1 text-[#F8FAFC]">Hay una versión nueva del Workspace (v${state.updateAvail}).</span><button data-act="update-app" class="px-3 py-1 rounded-md bg-[#4edea3] text-[#0b1326] text-[11px] font-bold">Actualizar ahora</button></div>`:''}<header class="sticky top-0 z-30 backdrop-blur-md bg-[#0b1326]/85 border-b border-[#283449] px-4 md:px-6 py-3 flex items-center gap-3">
     <button data-act="toggle-sidebar" class="md:hidden text-[#94A3B8] text-xl leading-none">☰</button>
     <div class="min-w-0">
       <div class="flex items-center gap-1.5 text-[11px] text-[#64748b]"><span>Workspace</span><span>›</span><span class="text-[#94A3B8]">${p?esc(p.name):label}</span></div>
@@ -498,7 +516,10 @@ function overview() {
     </div>`; };
   return `<div class="space-y-6 fh-rise">
     <div class="grid grid-cols-3 gap-4">${card('💼','Proyectos',active)}${card('✅','Pendientes',pending)}${card('🎯','Hechas',done)}</div>
+    ${assistBox(null)}
+    ${planGrid(null)}
     <div><div class="flex items-center justify-between mb-3"><p class="text-xs font-semibold text-[#64748b] uppercase tracking-wider">Tus proyectos</p>${isOwner()?`<button data-act="new-proj" class="text-[11px] px-3 py-1.5 rounded-lg bg-[#8083ff] text-white font-semibold hover:bg-[#6d70e6]">＋ Nuevo proyecto</button>`:''}</div><div class="grid grid-cols-1 sm:grid-cols-2 gap-3">${state.projects.map(pcard).join('')||'<p class="text-sm text-[#64748b]">Sin proyectos aún. Pulsa «＋ Nuevo proyecto».</p>'}</div></div>
+    ${goalsRow(null)}
     <div class="fh-card rounded-2xl p-5">${calendar()}</div>
   </div>`;
 }
@@ -545,7 +566,11 @@ function projectDashboard(p) {
   const pend = ts.filter(t=>taskStage(t)==='pendiente'), curso = ts.filter(t=>taskStage(t)==='en_curso'), hecho = ts.filter(t=>taskStage(t)==='hecho');
   const mtgs = projMeetings(p.id), ups = projUpdates(p.id), fls = projFiles(p.id);
   return `<div class="space-y-5 fh-rise">
-    <!-- chat (lo primero que se ve) -->
+    <!-- dashboard del proyecto: asistente, semana de los dos y objetivos -->
+    ${assistBox(p.id)}
+    ${planGrid(p.id)}
+    ${goalsRow(p.id)}
+    <!-- chat -->
     ${projectChat(p)}
     <!-- tareas + archivos: justo debajo del chat, en móvil (apilados) y en escritorio (lado a lado) -->
     <div class="grid grid-cols-1 xl:grid-cols-3 gap-5">
@@ -595,8 +620,10 @@ function projectDashboard(p) {
         <input id="mtg-title" placeholder="Título de la reunión…" class="flex-1 bg-[#0d1528] border border-[#283449] rounded-lg text-sm px-3 py-2 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]" />
         <button data-act="add-mtg" data-id="${esc(p.id)}" class="px-3 py-2 rounded-lg bg-[#4edea3] text-[#0b1326] font-semibold text-sm">Añadir</button>
       </div>
-      <div class="space-y-1.5">${mtgs.map(m=>`<div class="flex items-center gap-3 py-2 px-2.5 rounded-lg bg-[#0d1528]"><span class="text-[#4edea3]">📅</span><span class="text-sm flex-1 truncate">${esc(m.title)}</span><span class="text-[11px] text-[#94A3B8]">${esc(m.date)}</span></div>`).join('') || '<p class="text-sm text-[#64748b] text-center py-4">Sin reuniones programadas</p>'}</div>
+      <div class="space-y-1.5">${mtgs.map(m=>`<div class="flex items-center gap-3 py-2 px-2.5 rounded-lg bg-[#0d1528]"><span class="text-[#4edea3]">📅</span><span class="text-sm flex-1 truncate">${esc(m.title)}</span><span class="text-[11px] text-[#94A3B8]">${esc(m.date)}${m.time?' · '+esc(m.time):''}</span></div>`).join('') || '<p class="text-sm text-[#64748b] text-center py-4">Sin reuniones programadas · díselo al asistente de arriba («reunión con … el martes a las 10»)</p>'}</div>
     </div>
+    <!-- calendario del proyecto: los dos -->
+    <div class="fh-card rounded-2xl p-5">${calendar(p.id)}</div>
   </div>`;
 }
 
@@ -621,17 +648,20 @@ function taskCard(t) {
   </div>`;
 }
 
-function calendar() {
+function calendar(pid) {
   const { m,y } = state.cal;
+  const who = state.calWho || 'todos';
+  const okWho = (email) => who==='todos' || email===who;
   const total=new Date(y,m+1,0).getDate(), offset=(new Date(y,m,1).getDay()+6)%7;
   const today=`${new Date().getFullYear()}-${pad(new Date().getMonth()+1)}-${pad(new Date().getDate())}`;
-  const byDay={}; state.events.forEach(e=>{ if(e.date)(byDay[e.date]=byDay[e.date]||[]).push({ title:(e.time?e.time+' ':'')+'📅 '+e.title, cls:'bg-[#4edea3]/15 text-[#4edea3]' }); });
-  state.tasks.forEach(t=>{ const d=String(t.dueDate||'').slice(0,10); if(!d||t.completed) return; const ini=(TEAM_NAME[t.assignee]||'?')[0]; (byDay[d]=byDay[d]||[]).push({ title:(t.due_time?t.due_time+' ':'')+ini+' · '+t.title, cls: t.assignee===me()?'bg-[#8083ff]/25 text-[#c0c1ff]':'bg-[#131b2e] border border-[#283449] text-[#94A3B8]' }); });
-  state.avail.forEach(a=>{ if(a.status&&a.status!=='libre'){ const nm=(TEAM_NAME[a.email]||'?')[0]; (byDay[a.date]=byDay[a.date]||[]).unshift({ title:nm+' '+(AVAIL[a.status]||AVAIL.ocupado)[0].toLowerCase(), cls:(AVAIL[a.status]||AVAIL.ocupado)[1] }); } });
+  const byDay={}; state.events.forEach(e=>{ if(!e.date) return; if(pid && e.type!=='proj:'+pid) return; (byDay[e.date]=byDay[e.date]||[]).push({ title:(e.time?e.time+' ':'')+'📅 '+e.title, cls:'bg-[#4edea3]/15 text-[#4edea3]' }); });
+  state.tasks.forEach(t=>{ const d=String(t.dueDate||'').slice(0,10); if(!d||t.completed) return; if(pid && t.category!==pid) return; if(!okWho(t.assignee)) return; const ini=(TEAM_NAME[t.assignee]||'?')[0]; (byDay[d]=byDay[d]||[]).push({ title:(t.due_time?t.due_time+' ':'')+ini+' · '+t.title, cls: t.assignee===me()?'bg-[#8083ff]/25 text-[#c0c1ff]':'bg-[#131b2e] border border-[#283449] text-[#94A3B8]' }); });
+  state.avail.forEach(a=>{ if(a.status&&a.status!=='libre'&&okWho(a.email)){ const nm=(TEAM_NAME[a.email]||'?')[0]; (byDay[a.date]=byDay[a.date]||[]).unshift({ title:nm+' '+(AVAIL[a.status]||AVAIL.ocupado)[0].toLowerCase(), cls:(AVAIL[a.status]||AVAIL.ocupado)[1] }); } });
+  const whoChips = [['todos','Los dos']].concat(TEAM.map(t=>[t.email,t.name])).map(([id,lab])=>`<button data-act="cal-who" data-id="${esc(id)}" class="px-2 py-0.5 rounded-full text-[10px] font-semibold ${who===id?'bg-[#8083ff]/20 text-[#c0c1ff] border border-[#8083ff]/40':'text-[#94A3B8] border border-[#283449]'}">${esc(lab)}</button>`).join('');
   let cells=''; for(let i=0;i<offset;i++) cells+='<div></div>';
   for(let d=1;d<=total;d++){ const ds=`${y}-${pad(m+1)}-${pad(d)}`, evs=byDay[ds]||[], isT=ds===today;
     cells+=`<div class="min-h-[64px] p-1.5 rounded-lg border ${isT?'border-[#8083ff] bg-[#8083ff]/10':'border-[#283449]/50'}"><span class="text-xs font-semibold ${isT?'text-[#8083ff]':'text-[#94A3B8]'}">${d}</span>${evs.slice(0,3).map(e=>`<div class="mt-0.5 text-[10px] leading-tight truncate px-1 py-0.5 rounded ${e.cls}">${esc(e.title)}</div>`).join('')}${evs.length>3?`<span class="text-[9px] text-[#64748b]">+${evs.length-3}</span>`:''}</div>`; }
-  return `<div class="flex items-center justify-between mb-4"><button data-act="cal-prev" class="p-1.5 rounded-lg hover:bg-[#1c2436] text-[#94A3B8]">‹</button><h3 class="font-headline font-bold">${MONTHS[m]} ${y}</h3><button data-act="cal-next" class="p-1.5 rounded-lg hover:bg-[#1c2436] text-[#94A3B8]">›</button></div>
+  return `<div class="flex items-center justify-between mb-3 gap-2 flex-wrap"><div class="flex items-center gap-1"><button data-act="cal-prev" class="p-1.5 rounded-lg hover:bg-[#1c2436] text-[#94A3B8]">‹</button><h3 class="font-headline font-bold">${MONTHS[m]} ${y}</h3><button data-act="cal-next" class="p-1.5 rounded-lg hover:bg-[#1c2436] text-[#94A3B8]">›</button></div><div class="flex items-center gap-1">${whoChips}</div></div>
     <div class="grid grid-cols-7 gap-0.5 mb-1">${DAYS.map(d=>`<div class="text-center text-[10px] font-semibold text-[#64748b] py-1">${d}</div>`).join('')}</div>
     <div class="grid grid-cols-7 gap-1">${cells}</div>
     <p class="text-[10px] text-[#64748b] mt-3 text-center">Reuniones 📅, tareas con fecha (C = Carlos, R = Raquel) y disponibilidad. Añade cosas con el asistente del <button data-act="sec" data-id="plan" class="text-[#8083ff] underline">Plan semanal</button>.</p>`;
@@ -842,21 +872,22 @@ async function assistAdd(){
   const i2 = document.getElementById('assist-input'); if (i2) { i2.value=''; i2.focus(); }
   const pv = document.getElementById('assist-preview'); if (pv) pv.textContent='';
 }
-function assistBox(){
+function assistBox(pid){
+  const pn = pid ? ((proj(pid)||{}).name||'') : '';
   return `<div class="fh-card rounded-2xl p-4 border-[#8083ff]/40">
-    <div class="flex items-center gap-2 mb-2"><span>🪄</span><h3 class="font-headline font-bold text-sm">Asistente</h3><span class="text-[10px] text-[#64748b]">escribe en tu idioma y lo pongo en el calendario</span></div>
+    <div class="flex items-center gap-2 mb-2 flex-wrap"><span>🪄</span><h3 class="font-headline font-bold text-sm">Asistente${pn?' · '+esc(pn):''}</h3><span class="text-[10px] text-[#64748b]">escribe una cita, una tarea o un objetivo y lo pongo en el calendario</span></div>
     <div class="flex items-center gap-2">
-      <input id="assist-input" placeholder="p. ej. «reunión con Jesús el jueves 24 a las 13:00» · «para Raquel: infografía vacunas mañana» · «objetivo esta semana: cerrar demo»" class="flex-1 min-w-0 bg-[#0d1528] border border-[#283449] rounded-xl text-sm px-3.5 py-2.5 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]" autocomplete="off" />
+      <input id="assist-input" placeholder="${pn?`p. ej. «reunión con Raquel el martes a las 10» · «para Raquel: infografía mañana» · «objetivo esta semana: …»`:`p. ej. «reunión con Jesús el jueves 24 a las 13:00 en MediKai» · «para Raquel: infografía mañana» · «objetivo esta semana: cerrar demo»`}" class="flex-1 min-w-0 bg-[#0d1528] border border-[#283449] rounded-xl text-sm px-3.5 py-2.5 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]" autocomplete="off" />
       <button data-act="assist-add" class="shrink-0 px-4 py-2.5 rounded-xl bg-[#8083ff] text-white text-sm font-semibold hover:bg-[#6d70e6]">Añadir</button>
     </div>
     <p id="assist-preview" class="text-[11px] text-[#c0c1ff] mt-2 min-h-[16px]"></p>
-    <p class="text-[10px] text-[#64748b] mt-1">Entiende: hoy · mañana · el jueves · 24 de octubre · 3/10 · a las 13:00 · para Raquel · en MediKai · esta semana / este mes (objetivos) · «reunión» crea una cita.</p>
+    <p class="text-[10px] text-[#64748b] mt-1">Entiende: hoy · mañana · el jueves · 24 de octubre · 3/10 · a las 13:00 · para Raquel${pn?'':' · en MediKai'} · esta semana / este mes (objetivos) · «reunión» o «cita» crea una reunión en el calendario.</p>
   </div>`;
 }
-function goalsBox(period, key, title){
-  const gs = state.goals.filter(g => g.period===period && g.period_key===key);
+function goalsBox(period, key, title, pid){
+  const gs = state.goals.filter(g => g.period===period && g.period_key===key && (!pid || g.project_id===pid));
   const done = gs.filter(g=>g.done).length;
-  const row = (g) => { const pj = g.project_id ? ((proj(g.project_id)||{}).name||'') : ''; const who = g.owner ? (TEAM_NAME[g.owner]||g.owner.split('@')[0]) : '';
+  const row = (g) => { const pj = (!pid && g.project_id) ? ((proj(g.project_id)||{}).name||'') : ''; const who = g.owner ? (TEAM_NAME[g.owner]||g.owner.split('@')[0]) : '';
     return `<div class="flex items-start gap-2 py-1.5 ${g.done?'opacity-60':''}">
       <button data-act="goal-toggle" data-id="${esc(g.id)}" class="mt-0.5 w-5 h-5 rounded-md border flex items-center justify-center shrink-0 ${g.done?'bg-[#4edea3] border-[#4edea3]':'border-[#334155]'}">${g.done?'<span class="text-[#0b1326] text-xs">✓</span>':''}</button>
       <div class="flex-1 min-w-0"><p class="text-sm ${g.done?'line-through text-[#64748b]':''}">${esc(g.title)}</p><div class="flex gap-1 flex-wrap mt-0.5">${who?`<span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#131b2e] border border-[#283449] text-[#94A3B8]">👤 ${esc(who)}</span>`:''}${pj?`<span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#8083ff]/10 text-[#c0c1ff]">${esc(pj)}</span>`:''}</div></div>
@@ -866,38 +897,36 @@ function goalsBox(period, key, title){
     <div class="flex items-center justify-between mb-2"><h3 class="font-headline font-bold text-sm">🎯 ${title}</h3><span class="text-[10px] text-[#64748b]">${done}/${gs.length} hechos</span></div>
     ${gs.length?`<div class="h-1.5 rounded-full bg-[#283449] overflow-hidden mb-2"><div class="h-full bg-[#4edea3]" style="width:${gs.length?Math.round(done*100/gs.length):0}%"></div></div>`:''}
     <div class="divide-y divide-[#283449]/60">${gs.map(row).join('') || '<p class="text-[11px] text-[#64748b] py-3 text-center">Sin objetivos aún</p>'}</div>
-    <input id="goal-input-${period}" placeholder="Nuevo objetivo… (Enter) · puedes poner «para Raquel» o el proyecto" class="w-full mt-2 bg-[#0d1528] border border-[#283449] rounded-lg text-sm px-3 py-2 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]" autocomplete="off" />
+    <input id="goal-input-${period}" placeholder="Nuevo objetivo… (Enter) · puedes poner «para Raquel»${pid?'':' o el proyecto'}" class="w-full mt-2 bg-[#0d1528] border border-[#283449] rounded-lg text-sm px-3 py-2 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]" autocomplete="off" />
   </div>`;
 }
-function planView(){
+/* Cuadrícula persona × día de la semana en curso (state.week). Con pid, solo tareas/reuniones de ese proyecto. */
+function planGrid(pid){
   const ws = state.week; const days = [0,1,2,3,4,5,6].map(i=>addDays(ws,i)); const todayS = isoDate(new Date());
-  const wk = isoWeekKey(ws), mk = monthKey(days[3]);
-  const monthName = MONTHS[days[3].getMonth()] + ' ' + days[3].getFullYear();
+  const wk = isoWeekKey(ws);
   const rango = days[0].toLocaleDateString('es-ES',{day:'numeric',month:'short'}) + ' – ' + days[6].toLocaleDateString('es-ES',{day:'numeric',month:'short'});
-  const tasksOn = (d,email) => state.tasks.filter(t=>!t.completed && t.assignee===email && String(t.dueDate||'').slice(0,10)===d).sort((a,b)=>String(a.due_time||'99').localeCompare(String(b.due_time||'99')));
-  const mtgOn = (d) => state.events.filter(e=>e.date===d).sort((a,b)=>String(a.time||'99').localeCompare(String(b.time||'99')));
+  const tasksOn = (d,email) => state.tasks.filter(t=>!t.completed && t.assignee===email && (!pid || t.category===pid) && String(t.dueDate||'').slice(0,10)===d).sort((a,b)=>String(a.due_time||'99').localeCompare(String(b.due_time||'99')));
+  const mtgOn = (d) => state.events.filter(e=>e.date===d && (!pid || e.type==='proj:'+pid)).sort((a,b)=>String(a.time||'99').localeCompare(String(b.time||'99')));
   const head = days.map(d=>{ const ds=isoDate(d); const isT=ds===todayS; return `<div class="px-2 py-2 text-center rounded-t-lg ${isT?'bg-[#8083ff]/15':''}"><p class="text-[10px] uppercase tracking-wider ${isT?'text-[#c0c1ff]':'text-[#64748b]'}">${DAYS[(d.getDay()+6)%7]}</p><p class="font-headline font-bold ${isT?'text-[#c0c1ff]':'text-[#F8FAFC]'}">${d.getDate()}</p></div>`; }).join('');
   const personRow = (mb) => {
     const mine = mb.email===me();
     const cells = days.map(d=>{ const ds=isoDate(d); const av=availOf(mb.email,ds); const st=(av&&av.status)||'libre'; const A=AVAIL[st]||AVAIL.libre; const editable = isOwner()||mine;
       const ts = tasksOn(ds, mb.email);
-      return `<div class="p-1.5 min-h-[96px] border-l border-[#283449]/50 ${ds===todayS?'bg-[#8083ff]/5':''}">
+      return `<div class="p-1.5 min-h-[92px] border-l border-[#283449]/50 ${ds===todayS?'bg-[#8083ff]/5':''}">
         <button data-act="avail-cycle" data-email="${esc(mb.email)}" data-date="${ds}" title="${editable?'Pulsa para cambiar':'Disponibilidad de '+esc(mb.name)}" class="w-full text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${A[1]} ${editable?'':'cursor-default'}">${A[0]}</button>
         <div class="space-y-1 mt-1.5">${ts.map(t=>`<button data-act="stage" data-id="${esc(t.id)}" data-stage="hecho" title="Marcar hecha" class="w-full text-left text-[10px] leading-tight px-1.5 py-1 rounded-md ${mine?'bg-[#8083ff]/20 text-[#F8FAFC]':'bg-[#131b2e] border border-[#283449] text-[#94A3B8]'} hover:line-through">${t.due_time?`<span class="text-[#c0c1ff]">${esc(t.due_time)}</span> `:''}${esc(t.title)}</button>`).join('')}</div>
       </div>`; }).join('');
     const nWeek = days.reduce((n,d)=>n+tasksOn(isoDate(d),mb.email).length,0);
     return `<div class="grid" style="grid-template-columns:110px repeat(7,minmax(0,1fr))">
-      <div class="p-2 flex flex-col justify-start"><p class="text-sm font-headline font-bold ${mine?'text-[#4edea3]':''}">${esc(mb.name)}</p><p class="text-[10px] text-[#64748b]">${nWeek} tarea(s)</p></div>${cells}
+      <div class="p-2"><p class="text-sm font-headline font-bold ${mine?'text-[#4edea3]':''}">${esc(mb.name)}</p><p class="text-[10px] text-[#64748b]">${nWeek} tarea(s)</p></div>${cells}
     </div>`;
   };
   const mtgRow = `<div class="grid border-t border-[#283449]" style="grid-template-columns:110px repeat(7,minmax(0,1fr))">
     <div class="p-2"><p class="text-sm font-headline font-bold">📅 Reuniones</p></div>
     ${days.map(d=>{ const ds=isoDate(d); const ms=mtgOn(ds); return `<div class="p-1.5 min-h-[44px] border-l border-[#283449]/50 space-y-1">${ms.map(m=>`<div class="text-[10px] leading-tight px-1.5 py-1 rounded-md bg-[#4edea3]/15 text-[#4edea3]">${m.time?esc(m.time)+' ':''}${esc(m.title)}</div>`).join('')}</div>`; }).join('')}
   </div>`;
-  const sinFecha = state.tasks.filter(t=>!t.completed && !t.dueDate);
-  return `<div class="space-y-4 fh-rise">
-    ${assistBox()}
-    <div class="fh-card rounded-2xl p-4">
+  const sinFecha = state.tasks.filter(t=>!t.completed && !t.dueDate && (!pid || t.category===pid));
+  return `<div class="fh-card rounded-2xl p-4">
       <div class="flex items-center justify-between gap-2 flex-wrap mb-3">
         <div class="flex items-center gap-2"><button data-act="plan-prev" class="w-8 h-8 rounded-lg bg-[#0d1528] border border-[#283449] text-[#94A3B8]">‹</button><button data-act="plan-today" class="px-3 h-8 rounded-lg bg-[#0d1528] border border-[#283449] text-[#94A3B8] text-xs">Hoy</button><button data-act="plan-next" class="w-8 h-8 rounded-lg bg-[#0d1528] border border-[#283449] text-[#94A3B8]">›</button></div>
         <div class="text-right"><h3 class="font-headline font-bold">Semana ${wk.split('-W')[1]} · ${rango}</h3><p class="text-[10px] text-[#64748b]">Pulsa la disponibilidad para cambiarla (Libre → Mañanas → Tardes → Ocupado → Guardia). Pulsa una tarea para darla por hecha.</p></div>
@@ -908,11 +937,21 @@ function planView(){
         ${mtgRow}
       </div></div>
       ${sinFecha.length?`<p class="text-[10px] text-[#64748b] mt-3">${sinFecha.length} tarea(s) pendientes sin fecha — están en <button data-act="sec" data-id="pendientes" class="text-[#8083ff] underline">Quién tiene qué</button>. Dales día con el asistente («… el martes»).</p>`:''}
-    </div>
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-      ${goalsBox('week', wk, 'Objetivos de la semana '+wk.split('-W')[1])}
-      ${goalsBox('month', mk, 'Objetivos de '+monthName)}
-    </div>
+    </div>`;
+}
+function goalsRow(pid){
+  const days3 = addDays(state.week,3); const wk = isoWeekKey(state.week), mk = monthKey(days3);
+  const monthName = MONTHS[days3.getMonth()] + ' ' + days3.getFullYear();
+  return `<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      ${goalsBox('week', wk, 'Objetivos de la semana '+wk.split('-W')[1], pid)}
+      ${goalsBox('month', mk, 'Objetivos de '+monthName, pid)}
+    </div>`;
+}
+function planView(){
+  return `<div class="space-y-4 fh-rise">
+    ${assistBox(null)}
+    ${planGrid(null)}
+    ${goalsRow(null)}
   </div>`;
 }
 
@@ -1026,6 +1065,8 @@ document.addEventListener('click', async (e) => {
   if (a==='goal-toggle'){ await toggleGoal(id); return; }
   if (a==='goal-del'){ await delGoal(id); return; }
   if (a==='assist-add'){ await assistAdd(); return; }
+  if (a==='cal-who'){ state.calWho=id; render(); return; }
+  if (a==='update-app'){ await updateApp(); return; }
   if (a==='tdone'){ state.taskDone=id; render(); return; }
   if (a==='stage'){ await setStage(id, el.dataset.stage); return; }
   if (a==='add-mtg'){ await addMeeting(id); return; }
@@ -1070,7 +1111,7 @@ function renderDenied(email){
     const { data:{ session } } = await sb.auth.getSession();
     if (!session) renderLogin();
     else if (!ALLOWED.has((session.user.email||'').toLowerCase())) renderDenied(session.user.email);
-    else { state.user=session.user; await loadAll(); pickInitialProject(); render(); subscribeRealtime(); }
+    else { state.user=session.user; await loadAll(); pickInitialProject(); render(); subscribeRealtime(); checkUpdate(); }
   } catch(e){ $app.innerHTML = `<div class="min-h-screen flex items-center justify-center p-6 text-center text-[#94A3B8]"><div><p class="text-lg font-headline">No se pudo cargar</p><p class="text-sm mt-2">${esc(String(e&&e.message||e))}</p></div></div>`; }
   sb.auth.onAuthStateChange((_e,sess)=>{ if(sess&&!state.user){ if(!ALLOWED.has((sess.user.email||'').toLowerCase())){renderDenied(sess.user.email);return;} state.user=sess.user; loadAll().then(()=>{pickInitialProject(); render(); subscribeRealtime();});} else if(!sess&&state.user){state.user=null; renderLogin();} });
 })();
