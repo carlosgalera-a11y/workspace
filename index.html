@@ -51,12 +51,21 @@
 const SUPA_URL = 'https://igvadjgjpyuvzailjqwg.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlndmFkamdqcHl1dnphaWxqcXdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NDI3MTAsImV4cCI6MjA4ODAxODcxMH0.eAqKCHDzrkvMTseaBP0I_JICP1owX60-cp3agYqRz4Q';
 const DEFAULT_REPO = 'carlosgalera-a11y/filehub2026';
-const APP_VERSION = 15; // mantener igual que CACHE en sw.js (workspace-vNN)
+const APP_VERSION = 16; // mantener igual que CACHE en sw.js (workspace-vNN)
 // URL propia (dinámica): funciona en github.io/workspace/ Y en el dominio propio.
 const APP_URL = (typeof location !== 'undefined' && location.origin) ? (location.origin + location.pathname) : 'https://filehubworksplace.com/';
 const CAL_URL = 'https://carlosgalera-a11y.github.io/calendario.html';
 const FILEHUB_URL = 'https://carlosgalera-a11y.github.io/';
 
+// Si el enlace tenía un ancla (#proj-xxx) al entrar con Google, Supabase pega su
+// «#access_token=…» detrás y la URL queda con dos '#': aquí se separa ANTES de crear
+// el cliente, guardando el ancla para volver a ese proyecto tras el login.
+(function(){
+  try {
+    const h = location.hash || ''; const k = h.indexOf('#access_token=');
+    if (k > 0) { sessionStorage.setItem('ws_after_login', h.slice(1, k)); history.replaceState(null, '', location.pathname + '#' + h.slice(k + 1)); }
+  } catch(_){}
+})();
 const sb = window.supabase.createClient(SUPA_URL, SUPA_KEY, { auth:{ persistSession:true, autoRefreshToken:true } });
 const $app = document.getElementById('app');
 const $file = document.getElementById('hidden-file');
@@ -197,7 +206,9 @@ async function addTask(pid) {
 }
 /* Enlace directo (#proj-xxx) y, para quien solo ve un proyecto, entrar en él sin pasar por la lista. */
 function pickInitialProject(){
-  const h = (location.hash||'').replace(/^#\/?/,'');
+  let h = (location.hash||'').replace(/^#\/?/,'');
+  if (/access_token=|refresh_token=|error=/.test(h)) { h = ''; try{ history.replaceState(null,'',location.pathname); }catch(_){} }
+  try { const saved = sessionStorage.getItem('ws_after_login'); if (saved) { sessionStorage.removeItem('ws_after_login'); if (!h) { h = saved.replace(/^\/?/,''); history.replaceState(null,'',location.pathname+'#'+h); } } } catch(_){}
   if (h && proj(h)) { state.selectedProject = h; state.section = 'overview'; return; }
   if (!isOwner() && state.projects.length === 1) { state.selectedProject = state.projects[0].id; state.section = 'overview'; }
 }
@@ -1033,7 +1044,11 @@ function renderLogin() {
 document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-act]'); if(!el) return;
   const a = el.dataset.act, id = el.dataset.id;
-  if (a==='login'){ await sb.auth.signInWithOAuth({provider:'google',options:{redirectTo:location.href}}); return; }
+  if (a==='login'){
+    // Vuelve a la raíz limpia (sin ancla): con «#proj-xxx» en el redirectTo, el token de Google no se leía.
+    try { const h=(location.hash||'').replace(/^#/,''); if (h && !/access_token=/.test(h)) sessionStorage.setItem('ws_after_login', h); } catch(_){}
+    await sb.auth.signInWithOAuth({provider:'google',options:{redirectTo:location.origin+location.pathname}}); return;
+  }
   if (a==='logout'){ await sb.auth.signOut(); location.reload(); return; }
   if (a==='toggle-sidebar'){ state.sidebar=!state.sidebar; render(); return; }
   if (a==='close-sidebar'){ state.sidebar=false; render(); return; }
