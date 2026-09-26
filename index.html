@@ -51,7 +51,7 @@
 const SUPA_URL = 'https://igvadjgjpyuvzailjqwg.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlndmFkamdqcHl1dnphaWxqcXdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NDI3MTAsImV4cCI6MjA4ODAxODcxMH0.eAqKCHDzrkvMTseaBP0I_JICP1owX60-cp3agYqRz4Q';
 const DEFAULT_REPO = 'carlosgalera-a11y/filehub2026';
-const APP_VERSION = 16; // mantener igual que CACHE en sw.js (workspace-vNN)
+const APP_VERSION = 17; // mantener igual que CACHE en sw.js (workspace-vNN)
 // URL propia (dinámica): funciona en github.io/workspace/ Y en el dominio propio.
 const APP_URL = (typeof location !== 'undefined' && location.origin) ? (location.origin + location.pathname) : 'https://filehubworksplace.com/';
 const CAL_URL = 'https://carlosgalera-a11y.github.io/calendario.html';
@@ -83,7 +83,7 @@ const fmtDay = (d) => d.toLocaleDateString('es-ES',{weekday:'short',day:'numeric
 
 const state = {
   user: null, projects: [], tasks: [], events: [], files: [], updates: [], members: [], goals: [], avail: [],
-  week: mondayOf(new Date()), calWho: 'todos', updateAvail: false,
+  week: mondayOf(new Date()), calWho: 'todos', updateAvail: false, schedule: [],
   section: 'overview', selectedProject: null,
   gh: null, ghLoading: false, ghTab: 'commits',
   cal: { m: new Date().getMonth(), y: new Date().getFullYear() },
@@ -149,7 +149,7 @@ const taskStage = (t) => t.completed ? 'hecho' : (t.stage==='en_curso' ? 'en_cur
 /* ── data (tablas COMPARTIDAS ws_*: RLS de pareja Carlos+Raquel → los dos veis y editáis lo mismo) ── */
 const me = () => (state.user && state.user.email) || '';
 async function loadAll() {
-  const [pr,tk,mt,fi,up,mb,gl,av] = await Promise.all([
+  const [pr,tk,mt,fi,up,mb,gl,av,sc] = await Promise.all([
     sb.from('ws_projects').select('*').order('created_at',{ascending:true}),
     sb.from('ws_tasks').select('*').order('created_at',{ascending:false}).limit(500),
     sb.from('ws_meetings').select('*').limit(500),
@@ -158,14 +158,16 @@ async function loadAll() {
     sb.from('ws_project_members').select('*'),
     sb.from('ws_goals').select('*').order('created_at',{ascending:true}),
     sb.from('ws_availability').select('*'),
+    sb.from('ws_schedule').select('*'),
   ]);
   state.goals = gl.data || [];
   state.avail = av.data || [];
+  state.schedule = sc.data || [];
   state.projects = pr.data || [];
   state.members = mb.data || [];
   if (state.selectedProject && !proj(state.selectedProject)) state.selectedProject = null;
   state.tasks = (tk.data||[]).map(t => ({ ...t, category:t.project_id, dueDate:t.due_date }));
-  state.events = (mt.data||[]).map(m => ({ id:m.id, title:m.title, date:(m.date||'').slice(0,10), time:m.time||'', type:'proj:'+m.project_id }));
+  state.events = (mt.data||[]).map(m => ({ id:m.id, title:m.title, date:(m.date||'').slice(0,10), time:m.time||'', duration_min:m.duration_min||null, type:'proj:'+m.project_id }));
   state.files = (fi.data||[]).map(f => ({ ...f, folder:((state.projects.find(p=>p.id===f.project_id)||{}).name)||'Workspace', tags:['proj:'+f.project_id] }));
   state.updates = up.data || [];
 }
@@ -365,7 +367,7 @@ async function subscribeRealtime(){
     // deje pasar los cambios (si no, Realtime iría como anon y no llegaría nada).
     try { const { data:{ session } } = await sb.auth.getSession(); if(session&&session.access_token&&sb.realtime&&sb.realtime.setAuth) sb.realtime.setAuth(session.access_token); } catch(_){}
     let ch = sb.channel('ws-live');
-    ['ws_projects','ws_tasks','ws_meetings','ws_updates','ws_files','ws_project_members','ws_goals','ws_availability'].forEach(t=>{
+    ['ws_projects','ws_tasks','ws_meetings','ws_updates','ws_files','ws_project_members','ws_goals','ws_availability','ws_schedule'].forEach(t=>{
       ch = ch.on('postgres_changes', { event:'*', schema:'public', table:t }, onLiveChange);
     });
     ch.subscribe((status)=>{ const was=state._live; state._live = (status==='SUBSCRIBED'); if(state.user && was!==state._live) renderPreserve(); });
@@ -528,6 +530,8 @@ function overview() {
   return `<div class="space-y-6 fh-rise">
     <div class="grid grid-cols-3 gap-4">${card('💼','Proyectos',active)}${card('✅','Pendientes',pending)}${card('🎯','Hechas',done)}</div>
     ${assistBox(null)}
+    ${todayBoard(null)}
+    ${upcomingTimeline(null)}
     ${planGrid(null)}
     <div><div class="flex items-center justify-between mb-3"><p class="text-xs font-semibold text-[#64748b] uppercase tracking-wider">Tus proyectos</p>${isOwner()?`<button data-act="new-proj" class="text-[11px] px-3 py-1.5 rounded-lg bg-[#8083ff] text-white font-semibold hover:bg-[#6d70e6]">＋ Nuevo proyecto</button>`:''}</div><div class="grid grid-cols-1 sm:grid-cols-2 gap-3">${state.projects.map(pcard).join('')||'<p class="text-sm text-[#64748b]">Sin proyectos aún. Pulsa «＋ Nuevo proyecto».</p>'}</div></div>
     ${goalsRow(null)}
@@ -579,6 +583,8 @@ function projectDashboard(p) {
   return `<div class="space-y-5 fh-rise">
     <!-- dashboard del proyecto: asistente, semana de los dos y objetivos -->
     ${assistBox(p.id)}
+    ${todayBoard(p.id)}
+    ${upcomingTimeline(p.id)}
     ${planGrid(p.id)}
     ${goalsRow(p.id)}
     <!-- chat -->
@@ -592,6 +598,9 @@ function projectDashboard(p) {
         <input id="task-input" placeholder="Nueva tarea de ${esc(p.name)}…" class="flex-1 min-w-[140px] bg-[#0d1528] border border-[#283449] rounded-lg text-sm px-3 py-2 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]" />
         <select id="task-scope" class="${selCls}"><option value="comun">Común</option><option value="individual">Individual</option></select>
         <select id="task-assignee" class="${selCls}"><option value="">Sin asignar</option>${TEAM.map(m=>`<option value="${esc(m.email)}">${esc(m.name)}</option>`).join('')}</select>
+        <input id="task-date" type="date" title="Día" class="${selCls}" />
+        <input id="task-time" type="time" title="Hora" class="${selCls}" />
+        <select id="task-dur" title="Tiempo que ocupa" class="${selCls}"><option value="">⏱</option><option value="15">15 min</option><option value="30">30 min</option><option value="60">1 h</option><option value="120">2 h</option><option value="180">3 h</option></select>
         <input type="hidden" id="task-proj" value="${esc(p.id)}" />
         <button data-act="add-task2" class="p-2 rounded-lg bg-[#8083ff] text-white hover:bg-[#6d70e6]">＋</button>
       </div>
@@ -665,17 +674,20 @@ function calendar(pid) {
   const okWho = (email) => who==='todos' || email===who;
   const total=new Date(y,m+1,0).getDate(), offset=(new Date(y,m,1).getDay()+6)%7;
   const today=`${new Date().getFullYear()}-${pad(new Date().getMonth()+1)}-${pad(new Date().getDate())}`;
-  const byDay={}; state.events.forEach(e=>{ if(!e.date) return; if(pid && e.type!=='proj:'+pid) return; (byDay[e.date]=byDay[e.date]||[]).push({ title:(e.time?e.time+' ':'')+'📅 '+e.title, cls:'bg-[#4edea3]/15 text-[#4edea3]' }); });
+  const byDay={}; state.events.forEach(e=>{ if(!e.date) return; if(pid && e.type!=='proj:'+pid) return; (byDay[e.date]=byDay[e.date]||[]).push({ title:(e.time?e.time+' ':'')+'📅 '+e.title, cls:'bg-[#a78bfa]/30 text-[#e9d5ff] font-semibold', mtg:true }); });
   state.tasks.forEach(t=>{ const d=String(t.dueDate||'').slice(0,10); if(!d||t.completed) return; if(pid && t.category!==pid) return; if(!okWho(t.assignee)) return; const ini=(TEAM_NAME[t.assignee]||'?')[0]; (byDay[d]=byDay[d]||[]).push({ title:(t.due_time?t.due_time+' ':'')+ini+' · '+t.title, cls: t.assignee===me()?'bg-[#8083ff]/25 text-[#c0c1ff]':'bg-[#131b2e] border border-[#283449] text-[#94A3B8]' }); });
   state.avail.forEach(a=>{ if(a.status&&a.status!=='libre'&&okWho(a.email)){ const nm=(TEAM_NAME[a.email]||'?')[0]; (byDay[a.date]=byDay[a.date]||[]).unshift({ title:nm+' '+(AVAIL[a.status]||AVAIL.ocupado)[0].toLowerCase(), cls:(AVAIL[a.status]||AVAIL.ocupado)[1] }); } });
   const whoChips = [['todos','Los dos']].concat(TEAM.map(t=>[t.email,t.name])).map(([id,lab])=>`<button data-act="cal-who" data-id="${esc(id)}" class="px-2 py-0.5 rounded-full text-[10px] font-semibold ${who===id?'bg-[#8083ff]/20 text-[#c0c1ff] border border-[#8083ff]/40':'text-[#94A3B8] border border-[#283449]'}">${esc(lab)}</button>`).join('');
   let cells=''; for(let i=0;i<offset;i++) cells+='<div></div>';
   for(let d=1;d<=total;d++){ const ds=`${y}-${pad(m+1)}-${pad(d)}`, evs=byDay[ds]||[], isT=ds===today;
-    cells+=`<div class="min-h-[64px] p-1.5 rounded-lg border ${isT?'border-[#8083ff] bg-[#8083ff]/10':'border-[#283449]/50'}"><span class="text-xs font-semibold ${isT?'text-[#8083ff]':'text-[#94A3B8]'}">${d}</span>${evs.slice(0,3).map(e=>`<div class="mt-0.5 text-[10px] leading-tight truncate px-1 py-0.5 rounded ${e.cls}">${esc(e.title)}</div>`).join('')}${evs.length>3?`<span class="text-[9px] text-[#64748b]">+${evs.length-3}</span>`:''}</div>`; }
+    const mini = TEAM.filter(t=>okWho(t.email)).map(t=>`<div class="flex items-center gap-1 mt-0.5"><span class="text-[8px] w-2 text-[#64748b]">${esc(t.name[0])}</span><div class="flex-1">${timeline(t.email, ds, { h:5 })}</div></div>`).join('');
+    const hasMtg = evs.some(e=>e.mtg);
+    cells+=`<div class="min-h-[64px] p-1.5 rounded-lg border ${isT?'border-[#8083ff] bg-[#8083ff]/10':hasMtg?'border-[#a78bfa]/70 bg-[#a78bfa]/10':'border-[#283449]/50'}"><span class="text-xs font-semibold ${isT?'text-[#8083ff]':'text-[#94A3B8]'}">${d}</span>${mini}${evs.slice(0,3).map(e=>`<div class="mt-0.5 text-[10px] leading-tight truncate px-1 py-0.5 rounded ${e.cls}">${esc(e.title)}</div>`).join('')}${evs.length>3?`<span class="text-[9px] text-[#64748b]">+${evs.length-3}</span>`:''}</div>`; }
   return `<div class="flex items-center justify-between mb-3 gap-2 flex-wrap"><div class="flex items-center gap-1"><button data-act="cal-prev" class="p-1.5 rounded-lg hover:bg-[#1c2436] text-[#94A3B8]">‹</button><h3 class="font-headline font-bold">${MONTHS[m]} ${y}</h3><button data-act="cal-next" class="p-1.5 rounded-lg hover:bg-[#1c2436] text-[#94A3B8]">›</button></div><div class="flex items-center gap-1">${whoChips}</div></div>
     <div class="grid grid-cols-7 gap-0.5 mb-1">${DAYS.map(d=>`<div class="text-center text-[10px] font-semibold text-[#64748b] py-1">${d}</div>`).join('')}</div>
     <div class="grid grid-cols-7 gap-1">${cells}</div>
-    <p class="text-[10px] text-[#64748b] mt-3 text-center">Reuniones 📅, tareas con fecha (C = Carlos, R = Raquel) y disponibilidad. Añade cosas con el asistente del <button data-act="sec" data-id="plan" class="text-[#8083ff] underline">Plan semanal</button>.</p>`;
+    ${TL_LEGEND}
+    <p class="text-[10px] text-[#64748b] mt-1 text-center">Cada día lleva la barra de C = Carlos y R = Raquel. Añade cosas con el asistente del <button data-act="sec" data-id="plan" class="text-[#8083ff] underline">Plan semanal</button>.</p>`;
 }
 
 function addTaskRow(){
@@ -688,6 +700,8 @@ function addTaskRow(){
     <select id="task-proj" class="${selCls}">${pjOpts}</select>
     <select id="task-assignee" class="${selCls}">${asOpts}</select>
     <input id="task-date" type="date" class="${selCls}" />
+    <input id="task-time" type="time" title="Hora" class="${selCls}" />
+    <select id="task-dur" title="Tiempo que ocupa" class="${selCls}"><option value="">⏱ sin duración</option><option value="15">15 min</option><option value="30">30 min</option><option value="45">45 min</option><option value="60">1 h</option><option value="90">1,5 h</option><option value="120">2 h</option><option value="180">3 h</option><option value="240">4 h</option></select>
     <select id="task-prio" class="${selCls}"><option value="medium">Media</option><option value="high">Alta</option><option value="urgent">Urgente</option><option value="low">Baja</option></select>
     <button data-act="add-task2" class="px-4 py-2 rounded-lg bg-[#4edea3] text-[#0b1326] text-sm font-semibold">Añadir</button>
   </div>`;
@@ -747,6 +761,7 @@ async function addTaskFull(){
   const project_id=((g('task-proj')||{}).value)||'general';
   const row={ id:'task-'+uid(), project_id, title, completed:false, stage:null,
     priority:((g('task-prio')||{}).value)||'medium', due_date:((g('task-date')||{}).value)||null,
+    due_time:((g('task-time')||{}).value)||null, duration_min:(+((g('task-dur')||{}).value)||null),
     scope:((g('task-scope')||{}).value)||'comun', assignee:((g('task-assignee')||{}).value)||'',
     created_by:me(), created_at:new Date().toISOString() };
   state.tasks.unshift({ ...row, category:project_id, dueDate:row.due_date }); render();
@@ -759,13 +774,112 @@ async function delTask(id){
 
 /* ══ Plan semanal: disponibilidad, objetivos por semana/mes y asistente ══ */
 const AVAIL = {
-  libre:   ['Libre',    'bg-[#4edea3]/15 text-[#4edea3]'],
-  manana:  ['Mañanas',  'bg-[#8083ff]/20 text-[#c0c1ff]'],
-  tarde:   ['Tardes',   'bg-[#8083ff]/20 text-[#c0c1ff]'],
-  ocupado: ['Ocupado',  'bg-[#F59E0B]/20 text-[#F59E0B]'],
-  guardia: ['Guardia',  'bg-[#EF4444]/20 text-[#EF4444]'],
+  libre:      ['Según horario',   'bg-[#131b2e] border border-[#283449] text-[#94A3B8]'],
+  vacaciones: ['Día libre',       'bg-[#4edea3]/15 text-[#4edea3]'],
+  manana:     ['Ocupado mañana',  'bg-[#F59E0B]/20 text-[#F59E0B]'],
+  tarde:      ['Ocupado tarde',   'bg-[#F59E0B]/20 text-[#F59E0B]'],
+  ocupado:    ['Ocupado todo',    'bg-[#EF4444]/20 text-[#EF4444]'],
+  guardia:    ['Guardia',         'bg-[#EF4444]/25 text-[#EF4444]'],
 };
-const AVAIL_ORDER = ['libre','manana','tarde','ocupado','guardia'];
+const AVAIL_ORDER = ['libre','vacaciones','manana','tarde','ocupado','guardia'];
+/* ── Línea de tiempo del día: rojo = trabajo (horario semanal) o tarea/reunión con hora; verde = libre ── */
+const DAY_START = 7, DAY_END = 22;
+const tmin = (hhmm) => { const [h,m] = String(hhmm||'').split(':').map(Number); return (h||0)*60 + (m||0); };
+const fmtHM = (mins) => pad(Math.floor(mins/60)) + ':' + pad(mins%60);
+const weekdayOf = (ds) => { const d = new Date(ds+'T12:00:00'); return ((d.getDay()+6)%7)+1; };
+function dayBlocks(email, ds){
+  const wd = weekdayOf(ds); const av = availOf(email, ds); const st = av && av.status;
+  const blocks = [];
+  if (st==='guardia') blocks.push({ s:0, e:1440, kind:'work', label:'Guardia' });
+  else if (st==='ocupado') blocks.push({ s:0, e:1440, kind:'work', label:'Ocupado' });
+  else if (st==='manana') blocks.push({ s:8*60, e:15*60, kind:'work', label:'Ocupado (mañana)' });
+  else if (st==='tarde') blocks.push({ s:15*60, e:22*60, kind:'work', label:'Ocupado (tarde)' });
+  else if (st!=='vacaciones') state.schedule.filter(x => x.email===email && +x.weekday===wd).forEach(x => blocks.push({ s:tmin(x.start_time), e:tmin(x.end_time), kind:'work', label:x.label||'Trabajo' }));
+  state.tasks.filter(t => !t.completed && t.assignee===email && String(t.dueDate||'').slice(0,10)===ds && t.due_time).forEach(t => { const s0=tmin(t.due_time); blocks.push({ s:s0, e:s0+(+t.duration_min||60), kind:'task', label:t.title }); });
+  state.events.filter(e => e.date===ds && e.time).forEach(e => { const s0=tmin(e.time); blocks.push({ s:s0, e:s0+(+e.duration_min||60), kind:'meeting', label:e.title }); });
+  return blocks;
+}
+function timeline(email, ds, opts){
+  opts = opts || {}; const h = opts.h || 12; const total = (DAY_END-DAY_START)*60;
+  const pct = (m) => Math.max(0, Math.min(100, (m - DAY_START*60)/total*100));
+  const bl = dayBlocks(email, ds);
+  const seg = (b) => { const l = pct(b.s), w = Math.max(1.2, pct(b.e)-l); if (w<=0) return '';
+    const cls = b.kind==='work' ? 'bg-[#EF4444]/80' : b.kind==='task' ? 'bg-[#f43f5e] ring-1 ring-white/60' : 'bg-[#a78bfa] ring-1 ring-white/60';
+    const txt = opts.labels && w>9 ? `<span class="absolute inset-0 px-1 text-[9px] leading-[${h}px] text-white truncate">${esc(fmtHM(b.s)+'–'+fmtHM(b.e)+' '+b.label)}</span>` : '';
+    return `<div class="absolute top-0 bottom-0 ${cls}" style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%" title="${esc(fmtHM(b.s)+'–'+fmtHM(b.e)+' · '+b.label)}">${txt}</div>`; };
+  return `<div class="relative rounded-md overflow-hidden bg-[#4edea3]/40" style="height:${h}px" title="Verde: disponible">${bl.map(seg).join('')}</div>`;
+}
+function hourRuler(){
+  const total = DAY_END-DAY_START;
+  return `<div class="relative h-4 text-[9px] text-[#64748b]">${Array.from({length:total+1},(_,i)=>DAY_START+i).filter(hh=>hh%3===0||hh===DAY_START).map(hh=>`<span class="absolute" style="left:${((hh-DAY_START)/total*100).toFixed(2)}%;transform:translateX(-50%)">${hh}h</span>`).join('')}</div>`;
+}
+const TL_LEGEND = `<p class="text-[10px] text-[#64748b] mt-2 flex items-center gap-3 flex-wrap"><span><span class="inline-block w-3 h-2 rounded-sm bg-[#EF4444]/80 align-middle"></span> trabajo (centro de salud)</span><span><span class="inline-block w-3 h-2 rounded-sm bg-[#f43f5e] ring-1 ring-white/60 align-middle"></span> tarea con hora</span><span><span class="inline-block w-3 h-2 rounded-sm bg-[#a78bfa] ring-1 ring-white/60 align-middle"></span> reunión / evento destacado (lila)</span><span><span class="inline-block w-3 h-2 rounded-sm bg-[#4edea3]/40 align-middle"></span> disponible</span></p>`;
+/* Tarjeta «Hoy»: las dos líneas de tiempo con horas, para verlo de un vistazo. */
+function todayBoard(pid){
+  const ds = isoDate(new Date());
+  const rows = TEAM.map(mb => { const bl = dayBlocks(mb.email, ds); const work = bl.filter(b=>b.kind==='work'); const libre = work.length ? 'trabaja '+work.map(b=>fmtHM(b.s)+'–'+fmtHM(b.e)).join(', ') : 'sin turno';
+    return `<div class="grid items-center gap-2" style="grid-template-columns:110px 1fr"><div><p class="text-sm font-headline font-bold ${mb.email===me()?'text-[#4edea3]':''}">${esc(mb.name)}</p><p class="text-[10px] text-[#64748b]">${esc(libre)}</p></div>${timeline(mb.email, ds, { h:26, labels:true })}</div>`; }).join('');
+  return `<div class="fh-card rounded-2xl p-4">
+    <div class="flex items-center justify-between mb-2 gap-2 flex-wrap"><h3 class="font-headline font-bold text-sm">🕒 Hoy · ${esc(new Date().toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'}))}</h3><span class="text-[10px] text-[#64748b]">${DAY_START}:00 – ${DAY_END}:00</span></div>
+    <div class="grid" style="grid-template-columns:110px 1fr"><div></div>${hourRuler()}</div>
+    <div class="space-y-2">${rows}</div>
+    ${TL_LEGEND}
+  </div>`;
+}
+/* Próximos días: línea de tiempo horizontal con reuniones (lila) y tareas con fecha (rojo). */
+function upcomingTimeline(pid){
+  const N = 14; const today = new Date(); today.setHours(0,0,0,0);
+  const days = Array.from({length:N},(_,i)=>addDays(today,i));
+  const items = (ds) => {
+    const ms = state.events.filter(e=>e.date===ds && (!pid || e.type==='proj:'+pid)).sort((a,b)=>String(a.time||'99').localeCompare(String(b.time||'99')))
+      .map(e=>({ t:(e.time?e.time+' ':'')+e.title, cls:'bg-[#a78bfa]/25 text-[#e9d5ff] border border-[#a78bfa]/40', mtg:true }));
+    const ts = state.tasks.filter(t=>!t.completed && String(t.dueDate||'').slice(0,10)===ds && (!pid || t.category===pid)).sort((a,b)=>String(a.due_time||'99').localeCompare(String(b.due_time||'99')))
+      .map(t=>({ t:(t.due_time?t.due_time+' ':'')+(TEAM_NAME[t.assignee]?TEAM_NAME[t.assignee][0]+' · ':'')+t.title, cls:'bg-[#f43f5e]/20 text-[#fecdd3] border border-[#f43f5e]/40' }));
+    const av = TEAM.map(mb=>({ mb, a:availOf(mb.email,ds) })).filter(x=>x.a && ['guardia','vacaciones','ocupado'].includes(x.a.status))
+      .map(x=>({ t:x.mb.name[0]+' · '+AVAIL[x.a.status][0], cls:AVAIL[x.a.status][1] }));
+    return ms.concat(ts, av);
+  };
+  const total = days.reduce((n,d)=>n+items(isoDate(d)).length,0);
+  const col = (d,i) => { const ds=isoDate(d); const its=items(ds); const isT=i===0; const hasMtg=its.some(x=>x.mtg);
+    return `<div class="relative shrink-0 w-[132px] ${i?'':'ml-1'}">
+      <div class="flex flex-col items-center"><span class="text-[9px] uppercase tracking-wider ${isT?'text-[#c0c1ff]':'text-[#64748b]'}">${isT?'hoy':DAYS[(d.getDay()+6)%7]}</span><span class="font-headline font-bold text-sm ${isT?'text-[#c0c1ff]':''}">${d.getDate()} ${MONTHS[d.getMonth()].slice(0,3).toLowerCase()}</span>
+        <span class="w-3 h-3 rounded-full border-2 ${hasMtg?'bg-[#a78bfa] border-[#a78bfa]':its.length?'bg-[#f43f5e] border-[#f43f5e]':'bg-[#0b1326] border-[#334155]'} ${isT?'ring-2 ring-[#8083ff]/50':''} mt-1 relative z-10"></span></div>
+      <div class="space-y-1 mt-2 px-1">${its.slice(0,4).map(x=>`<div class="text-[10px] leading-tight px-1.5 py-1 rounded-md ${x.cls} truncate" title="${esc(x.t)}">${esc(x.t)}</div>`).join('')}${its.length>4?`<p class="text-[9px] text-[#64748b] text-center">+${its.length-4}</p>`:''}</div>
+    </div>`; };
+  return `<div class="fh-card rounded-2xl p-4">
+    <div class="flex items-center justify-between mb-2 gap-2 flex-wrap"><h3 class="font-headline font-bold text-sm">⏳ Próximos ${N} días</h3><span class="text-[10px] text-[#64748b]">${total} evento(s) y tarea(s) · <span class="text-[#e9d5ff]">lila</span> reuniones y eventos destacados · <span class="text-[#fecdd3]">rojo</span> tareas</span></div>
+    <div class="overflow-x-auto pb-1"><div class="relative flex" style="min-width:${N*132}px">
+      <div class="absolute left-0 right-0 border-t-2 border-dashed border-[#334155]" style="top:44px"></div>
+      ${days.map(col).join('')}
+    </div></div>
+  </div>`;
+}
+/* Editor del horario semanal (una franja por día; el dueño edita los dos, cada uno el suyo). */
+function scheduleEditor(){
+  const names = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
+  const person = (mb, idx) => { const editable = isOwner() || mb.email===me(); const rows = state.schedule.filter(x=>x.email===mb.email);
+    const lbl = (rows[0]||{}).label || '';
+    return `<div class="rounded-xl bg-[#0d1528] border border-[#283449] p-3">
+      <div class="flex items-center justify-between gap-2 mb-2"><p class="text-sm font-headline font-bold">${esc(mb.name)}</p>${editable?`<button data-act="sched-save" data-email="${esc(mb.email)}" data-idx="${idx}" class="text-[11px] px-3 py-1 rounded-lg bg-[#8083ff] text-white font-semibold">Guardar</button>`:'<span class="text-[10px] text-[#64748b]">solo lectura</span>'}</div>
+      <input id="sch-${idx}-label" value="${esc(lbl)}" placeholder="Dónde (p. ej. Centro de Salud La Manga)" ${editable?'':'disabled'} class="w-full mb-2 bg-[#131b2e] border border-[#283449] rounded-lg text-xs px-2 py-1.5 focus:outline-none focus:border-[#8083ff] disabled:opacity-60" />
+      <div class="space-y-1">${names.map((n,i)=>{ const wd=i+1; const r=rows.find(x=>+x.weekday===wd)||{}; return `<div class="flex items-center gap-2 text-xs"><span class="w-20 text-[#94A3B8]">${n}</span><input type="time" id="sch-${idx}-${wd}-s" value="${esc(r.start_time||'')}" ${editable?'':'disabled'} class="bg-[#131b2e] border border-[#283449] rounded-md px-1.5 py-1 text-[#F8FAFC] disabled:opacity-60" /><span class="text-[#64748b]">–</span><input type="time" id="sch-${idx}-${wd}-e" value="${esc(r.end_time||'')}" ${editable?'':'disabled'} class="bg-[#131b2e] border border-[#283449] rounded-md px-1.5 py-1 text-[#F8FAFC] disabled:opacity-60" />${r.start_time?`<span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#EF4444]/20 text-[#EF4444]">trabajo</span>`:`<span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#4edea3]/15 text-[#4edea3]">libre</span>`}</div>`; }).join('')}</div>
+    </div>`; };
+  return `<div class="fh-card rounded-2xl p-4">
+    <div class="flex items-center justify-between mb-3 gap-2 flex-wrap"><h3 class="font-headline font-bold text-sm">🏥 Horario de trabajo semanal</h3><span class="text-[10px] text-[#64748b]">Se repite cada semana y pinta el rojo de las líneas. Para un día concreto, usa la casilla de disponibilidad (guardia, día libre…).</span></div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">${TEAM.map(person).join('')}</div>
+  </div>`;
+}
+async function saveSchedule(email, idx){
+  const g = (id) => document.getElementById(id);
+  const label = ((g('sch-'+idx+'-label')||{}).value||'').trim() || 'Trabajo';
+  const rows = [];
+  for (let wd=1; wd<=7; wd++) { const st=((g('sch-'+idx+'-'+wd+'-s')||{}).value)||''; const en=((g('sch-'+idx+'-'+wd+'-e')||{}).value)||''; if (st && en && en>st) rows.push({ id:'sch-'+email.split('@')[0]+'-'+wd, email, weekday:wd, start_time:st, end_time:en, label }); }
+  try {
+    const { error: e1 } = await sb.from('ws_schedule').delete().eq('email', email); if (e1) throw e1;
+    if (rows.length) { const { error: e2 } = await sb.from('ws_schedule').insert(rows); if (e2) throw e2; }
+    state.schedule = state.schedule.filter(x=>x.email!==email).concat(rows); render(); toast('Horario guardado');
+  } catch(e){ alert('No se pudo guardar el horario: '+(e&&e.message||e)); await refreshData(); }
+}
 const availOf = (email, d) => state.avail.find(a => a.email===email && a.date===d && (a.slot||'todo')==='todo');
 async function cycleAvail(email, d){
   if (!(isOwner() || email===me())) { toast('Solo puedes cambiar tu disponibilidad'); return; }
@@ -803,12 +917,12 @@ const reEsc = (x) => String(x).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 function parseAssist(text){
   let t = ' '+String(text||'').replace(/\s+/g,' ').trim()+' ';
   const today = new Date(); today.setHours(0,0,0,0);
-  const out = { kind:'task', title:'', date:null, time:null, assignee:me(), project_id:null, period:null, period_key:null };
+  const out = { kind:'task', title:'', date:null, time:null, duration:null, assignee:me(), project_id:null, period:null, period_key:null };
   const cut = (re) => { const m = t.match(re); if (m) { t = t.replace(m[0],' '); return m; } return null; };
   let m;
   // ¿para quién?
   const W = '(?<![\\w.\\-\\/@])', Wend = '(?![\\w.\\-\\/@])';  // palabra suelta: no dentro de dominios ni correos
-  for (const mb of TEAM) { const n = reEsc(noAcc(mb.name)); if (cut(new RegExp(W+'(?:para|de|a)\\s+'+n+Wend,'i')) || cut(new RegExp(W+n+'\\s*:','i')) || cut(new RegExp(W+n+Wend,'i'))) out.assignee = mb.email; }
+  for (const mb of TEAM) { const n = reEsc(noAcc(mb.name)); if (new RegExp(W+'con\\s+'+n+Wend,'i').test(noAcc(t))) continue; if (cut(new RegExp(W+'(?:para|de|a)\\s+'+n+Wend,'i')) || cut(new RegExp(W+n+'\\s*:','i')) || cut(new RegExp(W+n+Wend,'i'))) out.assignee = mb.email; }
   if (cut(/\b(?:para\s+m[ií]|yo mismo|m[ií]a|m[ií]o)\b/i)) out.assignee = me();
   // ¿qué proyecto?
   for (const p of state.projects) { const n = reEsc(noAcc(p.name)); if (!n) continue; if (cut(new RegExp(W+'(?:en|de|del|para|proyecto)\\s+'+n+Wend,'i')) || cut(new RegExp(W+n+Wend,'i'))) out.project_id = p.id; }
@@ -823,6 +937,10 @@ function parseAssist(text){
   else if (cut(/\b(?:el\s+)?mes que viene\b|\bel pr[oó]ximo mes\b|\bpr[oó]ximo mes\b/i)) { out.period='month'; out.period_key=monthKey(new Date(today.getFullYear(),today.getMonth()+1,1)); }
   else if ((m = cut(new RegExp('\\b(?:en|para|durante)\\s+('+MON_RE+')\\b','i')))) { const mi=MON_IDX[noAcc(m[1])]; let y=today.getFullYear(); if (mi<today.getMonth()) y++; out.period='month'; out.period_key=y+'-'+pad(mi+1); }
   if (out.period && out.kind==='task') out.kind = 'goal';
+  // duración («durante 2 horas», «1,5 h», «30 min», «media hora», «(2h)»)
+  if (cut(/\bmedia hora\b/i)) out.duration = 30;
+  else if (cut(/\bun cuarto de hora\b/i)) out.duration = 15;
+  else if ((m = cut(/\b(?:durante|de|que\s+(?:me\s+)?(?:lleva|ocupa)|ocupa)\s+(\d+(?:[.,]\d+)?)\s*(h\b|horas?\b|min\b|minutos?\b)/i)) || (m = cut(/\((\d+(?:[.,]\d+)?)\s*(h|horas?|min|minutos?)\)/i)) || (m = cut(/\b(\d+(?:[.,]\d+)?)\s*(horas?\b|minutos?\b|min\b)/i))) { const n=parseFloat(String(m[1]).replace(',','.')); out.duration = /^h/i.test(m[2]) ? Math.round(n*60) : Math.round(n); }
   // hora
   if ((m = cut(/\b(?:a\s+las?|a\s+la)\s+(\d{1,2})(?:[:.h](\d{2}))?\s*(?:h\b|horas\b)?/i)) || (m = cut(/\b(\d{1,2})[:.](\d{2})\s*h?\b/)) || (m = cut(/\b(\d{1,2})\s*h\b/i))) { out.time = pad(Math.min(23,+m[1]))+':'+pad(m[2]?+m[2]:0); }
   // fecha
@@ -851,7 +969,8 @@ function assistSummary(p){
   const when = p.date ? fmtDay(p.date) + (p.time ? ' '+p.time : '') : (p.kind==='task' ? 'sin fecha' : '');
   const per = p.period==='week' ? 'semana '+p.period_key.split('-W')[1] : p.period==='month' ? MONTHS[+p.period_key.split('-')[1]-1] : '';
   const kind = p.kind==='meeting' ? '📅 Reunión' : p.kind==='goal' ? '🎯 Objetivo' : '📋 Tarea';
-  return [kind+' «'+p.title+'»', who?'👤 '+who:'', p.kind==='goal'?per:when, pj].filter(Boolean).join(' · ');
+  const dur = p.duration ? (p.duration%60===0 ? (p.duration/60)+' h' : p.duration+' min') : '';
+  return [kind+' «'+p.title+'»', who?'👤 '+who:'', p.kind==='goal'?per:when, dur?'⏱ '+dur:'', pj].filter(Boolean).join(' · ');
 }
 async function createFromAssist(p){
   if (!p.title) { toast('Escribe qué quieres añadir'); return; }
@@ -866,13 +985,13 @@ async function createFromAssist(p){
   const d = p.date ? isoDate(p.date) : null;
   if (p.kind==='meeting') {
     const pid = p.project_id || (state.projects[0]||{}).id || 'general';
-    const row = { id:'evt-'+uid(), project_id:pid, title:p.title, date:d, time:p.time||null, created_by:me(), created_at:now };
-    state.events.push({ id:row.id, title:row.title, date:d, time:row.time||'', type:'proj:'+pid }); render();
+    const row = { id:'evt-'+uid(), project_id:pid, title:p.title, date:d, time:p.time||null, duration_min:p.duration||null, created_by:me(), created_at:now };
+    state.events.push({ id:row.id, title:row.title, date:d, time:row.time||'', duration_min:row.duration_min, type:'proj:'+pid }); render();
     const { error } = await sb.from('ws_meetings').insert(row); if (error) { alert('No se pudo guardar la reunión: '+error.message); await refreshData(); return; }
     mirrorMeeting(row); toast('📅 Reunión en el calendario'); return;
   }
   const pid = p.project_id || 'general';
-  const row = { id:'task-'+uid(), project_id:pid, title:p.title, completed:false, stage:null, priority:'medium', due_date:d, due_time:p.time||null, scope:p.assignee?'individual':'comun', assignee:p.assignee||'', created_by:me(), created_at:now };
+  const row = { id:'task-'+uid(), project_id:pid, title:p.title, completed:false, stage:null, priority:'medium', due_date:d, due_time:p.time||null, duration_min:p.duration||null, scope:p.assignee?'individual':'comun', assignee:p.assignee||'', created_by:me(), created_at:now };
   state.tasks.unshift({ ...row, category:pid, dueDate:d }); render();
   const { error } = await sb.from('ws_tasks').insert(row); if (error) { alert('No se pudo guardar la tarea: '+error.message); await refreshData(); return; }
   toast(d ? '📋 Tarea en el calendario' : '📋 Tarea añadida');
@@ -892,7 +1011,7 @@ function assistBox(pid){
       <button data-act="assist-add" class="shrink-0 px-4 py-2.5 rounded-xl bg-[#8083ff] text-white text-sm font-semibold hover:bg-[#6d70e6]">Añadir</button>
     </div>
     <p id="assist-preview" class="text-[11px] text-[#c0c1ff] mt-2 min-h-[16px]"></p>
-    <p class="text-[10px] text-[#64748b] mt-1">Entiende: hoy · mañana · el jueves · 24 de octubre · 3/10 · a las 13:00 · para Raquel${pn?'':' · en MediKai'} · esta semana / este mes (objetivos) · «reunión» o «cita» crea una reunión en el calendario.</p>
+    <p class="text-[10px] text-[#64748b] mt-1">Entiende: hoy · mañana · el jueves · 24 de octubre · 3/10 · a las 13:00 · durante 2 horas / 30 min · para Raquel${pn?'':' · en MediKai'} · esta semana / este mes (objetivos) · «reunión» o «cita» crea una reunión en el calendario.</p>
   </div>`;
 }
 function goalsBox(period, key, title, pid){
@@ -924,7 +1043,8 @@ function planGrid(pid){
     const cells = days.map(d=>{ const ds=isoDate(d); const av=availOf(mb.email,ds); const st=(av&&av.status)||'libre'; const A=AVAIL[st]||AVAIL.libre; const editable = isOwner()||mine;
       const ts = tasksOn(ds, mb.email);
       return `<div class="p-1.5 min-h-[92px] border-l border-[#283449]/50 ${ds===todayS?'bg-[#8083ff]/5':''}">
-        <button data-act="avail-cycle" data-email="${esc(mb.email)}" data-date="${ds}" title="${editable?'Pulsa para cambiar':'Disponibilidad de '+esc(mb.name)}" class="w-full text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${A[1]} ${editable?'':'cursor-default'}">${A[0]}</button>
+        ${timeline(mb.email, ds, { h:12 })}
+        <button data-act="avail-cycle" data-email="${esc(mb.email)}" data-date="${ds}" title="${editable?'Pulsa para cambiar (según horario → día libre → ocupado mañana → tarde → todo el día → guardia)':'Disponibilidad de '+esc(mb.name)}" class="w-full mt-1 text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${A[1]} ${editable?'':'cursor-default'}">${A[0]}</button>
         <div class="space-y-1 mt-1.5">${ts.map(t=>`<button data-act="stage" data-id="${esc(t.id)}" data-stage="hecho" title="Marcar hecha" class="w-full text-left text-[10px] leading-tight px-1.5 py-1 rounded-md ${mine?'bg-[#8083ff]/20 text-[#F8FAFC]':'bg-[#131b2e] border border-[#283449] text-[#94A3B8]'} hover:line-through">${t.due_time?`<span class="text-[#c0c1ff]">${esc(t.due_time)}</span> `:''}${esc(t.title)}</button>`).join('')}</div>
       </div>`; }).join('');
     const nWeek = days.reduce((n,d)=>n+tasksOn(isoDate(d),mb.email).length,0);
@@ -934,19 +1054,20 @@ function planGrid(pid){
   };
   const mtgRow = `<div class="grid border-t border-[#283449]" style="grid-template-columns:110px repeat(7,minmax(0,1fr))">
     <div class="p-2"><p class="text-sm font-headline font-bold">📅 Reuniones</p></div>
-    ${days.map(d=>{ const ds=isoDate(d); const ms=mtgOn(ds); return `<div class="p-1.5 min-h-[44px] border-l border-[#283449]/50 space-y-1">${ms.map(m=>`<div class="text-[10px] leading-tight px-1.5 py-1 rounded-md bg-[#4edea3]/15 text-[#4edea3]">${m.time?esc(m.time)+' ':''}${esc(m.title)}</div>`).join('')}</div>`; }).join('')}
+    ${days.map(d=>{ const ds=isoDate(d); const ms=mtgOn(ds); return `<div class="p-1.5 min-h-[44px] border-l border-[#283449]/50 space-y-1">${ms.map(m=>`<div class="text-[10px] leading-tight px-1.5 py-1 rounded-md bg-[#a78bfa]/25 text-[#e9d5ff] border border-[#a78bfa]/40">${m.time?esc(m.time)+' ':''}${esc(m.title)}</div>`).join('')}</div>`; }).join('')}
   </div>`;
   const sinFecha = state.tasks.filter(t=>!t.completed && !t.dueDate && (!pid || t.category===pid));
   return `<div class="fh-card rounded-2xl p-4">
       <div class="flex items-center justify-between gap-2 flex-wrap mb-3">
         <div class="flex items-center gap-2"><button data-act="plan-prev" class="w-8 h-8 rounded-lg bg-[#0d1528] border border-[#283449] text-[#94A3B8]">‹</button><button data-act="plan-today" class="px-3 h-8 rounded-lg bg-[#0d1528] border border-[#283449] text-[#94A3B8] text-xs">Hoy</button><button data-act="plan-next" class="w-8 h-8 rounded-lg bg-[#0d1528] border border-[#283449] text-[#94A3B8]">›</button></div>
-        <div class="text-right"><h3 class="font-headline font-bold">Semana ${wk.split('-W')[1]} · ${rango}</h3><p class="text-[10px] text-[#64748b]">Pulsa la disponibilidad para cambiarla (Libre → Mañanas → Tardes → Ocupado → Guardia). Pulsa una tarea para darla por hecha.</p></div>
+        <div class="text-right"><h3 class="font-headline font-bold">Semana ${wk.split('-W')[1]} · ${rango}</h3><p class="text-[10px] text-[#64748b]">Barra: rojo = trabajo / tarea con hora, verde = libre (${DAY_START}–${DAY_END}h). La casilla cambia un día concreto (día libre, guardia…). Pulsa una tarea para darla por hecha.</p></div>
       </div>
       <div class="overflow-x-auto"><div class="min-w-[760px]">
         <div class="grid border-b border-[#283449]" style="grid-template-columns:110px repeat(7,minmax(0,1fr))"><div class="p-2 text-[10px] text-[#64748b] uppercase tracking-wider self-end">Persona / día</div>${head}</div>
         ${TEAM.map(personRow).join('')}
         ${mtgRow}
       </div></div>
+      ${TL_LEGEND}
       ${sinFecha.length?`<p class="text-[10px] text-[#64748b] mt-3">${sinFecha.length} tarea(s) pendientes sin fecha — están en <button data-act="sec" data-id="pendientes" class="text-[#8083ff] underline">Quién tiene qué</button>. Dales día con el asistente («… el martes»).</p>`:''}
     </div>`;
 }
@@ -961,8 +1082,11 @@ function goalsRow(pid){
 function planView(){
   return `<div class="space-y-4 fh-rise">
     ${assistBox(null)}
+    ${todayBoard(null)}
+    ${upcomingTimeline(null)}
     ${planGrid(null)}
     ${goalsRow(null)}
+    ${scheduleEditor()}
   </div>`;
 }
 
@@ -1082,6 +1206,7 @@ document.addEventListener('click', async (e) => {
   if (a==='assist-add'){ await assistAdd(); return; }
   if (a==='cal-who'){ state.calWho=id; render(); return; }
   if (a==='update-app'){ await updateApp(); return; }
+  if (a==='sched-save'){ await saveSchedule(el.dataset.email, el.dataset.idx); return; }
   if (a==='tdone'){ state.taskDone=id; render(); return; }
   if (a==='stage'){ await setStage(id, el.dataset.stage); return; }
   if (a==='add-mtg'){ await addMeeting(id); return; }
