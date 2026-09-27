@@ -51,7 +51,7 @@
 const SUPA_URL = 'https://igvadjgjpyuvzailjqwg.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlndmFkamdqcHl1dnphaWxqcXdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NDI3MTAsImV4cCI6MjA4ODAxODcxMH0.eAqKCHDzrkvMTseaBP0I_JICP1owX60-cp3agYqRz4Q';
 const DEFAULT_REPO = 'carlosgalera-a11y/filehub2026';
-const APP_VERSION = 20; // mantener igual que CACHE en sw.js (workspace-vNN)
+const APP_VERSION = 21; // mantener igual que CACHE en sw.js (workspace-vNN)
 // URL propia (dinámica): funciona en github.io/workspace/ Y en el dominio propio.
 const APP_URL = (typeof location !== 'undefined' && location.origin) ? (location.origin + location.pathname) : 'https://filehubworksplace.com/';
 const CAL_URL = 'https://carlosgalera-a11y.github.io/calendario.html';
@@ -670,47 +670,74 @@ function taskCard(t) {
   </div>`;
 }
 
+const CAL_BAR = { 'carlosgalera2roman@gmail.com':'bg-[#EF4444] text-white', 'raquelft87@gmail.com':'bg-[#F59E0B] text-[#0b1326]' };
+const hhCorto = (t) => { const [h,mi]=String(t||'').split(':'); return mi==='00'||!mi ? String(+h) : (+h)+':'+mi; };
+const etiquetaCorta = (l) => String(l||'Trabajo').replace(/centro de salud\s*/i,'').replace(/\s+/g,' ').trim().toUpperCase().slice(0,16);
+function barsFor(mb, ds){ const ini = mb.name[0]; const av = availOf(mb.email, ds); const st = av && av.status; const base = CAL_BAR[mb.email] || 'bg-[#EF4444] text-white';
+  if (st==='guardia') return [[ini+' · GUARDIA 24h','bg-[#7f1d1d] text-[#fecaca]']];
+  if (st==='ocupado') return [[ini+' · OCUPADO', base]];
+  if (st==='manana') return [[ini+' · OCUPADO 8–15', base]];
+  if (st==='tarde') return [[ini+' · OCUPADO 15–22', base]];
+  if (st==='vacaciones') return [[ini+' · DÍA LIBRE','bg-[#4edea3]/25 text-[#4edea3]']];
+  return state.schedule.filter(x=>x.email===mb.email && +x.weekday===weekdayOf(ds)).map(x=>[ini+' · '+etiquetaCorta(x.label)+' '+hhCorto(x.start_time)+'–'+hhCorto(x.end_time), base]); }
+/* Contenido de una celda/columna de día: barras de turno, citas (lila), tareas con hora (rojo), tareas sin hora. */
+function dayCell(ds, pid, okWho, limit, opts){
+  opts = opts || {}; const big = !!opts.big;
+  const bars = TEAM.filter(t=>okWho(t.email)).flatMap(mb=>barsFor(mb,ds));
+  const ms = state.events.filter(e=>e.date===ds && (!pid || e.type==='proj:'+pid)).sort((a,b)=>String(a.time||'99').localeCompare(String(b.time||'99')));
+  const ts = state.tasks.filter(t=>!t.completed && String(t.dueDate||'').slice(0,10)===ds && (!pid || t.category===pid) && okWho(t.assignee||'')).sort((a,b)=>String(a.due_time||'99').localeCompare(String(b.due_time||'99')));
+  const chips = ms.map(e=>({ t:(e.time?e.time+' ':'')+'📅 '+e.title, cls:'bg-[#a78bfa]/20 text-[#e9d5ff]', dot:'bg-[#a78bfa]' }))
+    .concat(ts.filter(t=>t.due_time).map(t=>({ t:t.due_time+' '+(TEAM_NAME[t.assignee]?TEAM_NAME[t.assignee][0]+' · ':'')+t.title, cls:'bg-[#f43f5e]/15 text-[#fecdd3]', dot:'bg-[#f43f5e]', id:t.id })));
+  const sinHora = ts.filter(t=>!t.due_time);
+  const tsz = big ? 'text-[11px] py-1' : 'text-[10px] py-0.5';
+  const html = `${bars.map(([txt,cls])=>`<div class="${big?'text-[11px] py-1.5':'text-[9px] py-1'} font-bold tracking-wide px-1.5 rounded-md mb-0.5 truncate ${cls}" title="${esc(txt)}">${esc(txt)}</div>`).join('')}
+      ${chips.slice(0, limit||999).map(c=>`<div class="flex items-center gap-1 ${tsz} leading-tight px-1.5 rounded-md mt-0.5 ${c.cls}" title="${esc(c.t)}"><span class="w-1.5 h-1.5 rounded-full ${c.dot} shrink-0"></span><span class="${big?'':'truncate'}">${esc(c.t)}</span></div>`).join('')}
+      ${limit && chips.length>limit?`<span class="text-[9px] text-[#94A3B8] px-1 mt-0.5">+${chips.length-limit} más</span>`:''}
+      ${big ? sinHora.map(t=>`<div class="flex items-center gap-1.5 ${tsz} leading-tight px-1.5 rounded-md mt-0.5 bg-[#8083ff]/10 text-[#c0c1ff]"><button data-act="stage" data-id="${esc(t.id)}" data-stage="hecho" title="Marcar hecha" class="w-3.5 h-3.5 rounded border border-[#8083ff]/60 shrink-0 hover:bg-[#4edea3]/30"></button><span>☑ ${TEAM_NAME[t.assignee]?TEAM_NAME[t.assignee][0]+' · ':''}${esc(t.title)}</span></div>`).join('')
+            : (sinHora.length?`<span class="mt-auto self-start text-[9px] px-1.5 py-0.5 rounded-md bg-[#8083ff]/15 text-[#c0c1ff] mt-1">☑ ${sinHora.length} tarea${sinHora.length>1?'s':''}</span>`:'')}`;
+  return { html, hasMtg: ms.length>0, n: chips.length + sinHora.length };
+}
+/* Vista de columnas (semana o 3 días): una columna por día con todo el contenido y las líneas de tiempo de los dos. */
+function calColumns(days, pid, okWho){
+  const todayS = isoDate(new Date());
+  const cols = days.map(d => { const ds = isoDate(d); const isT = ds===todayS; const c = dayCell(ds, pid, okWho, 0, { big:true });
+    return `<div class="min-w-0 rounded-xl border ${isT?'border-[#8083ff] bg-[#8083ff]/10':c.hasMtg?'border-[#a78bfa]/60':'border-[#283449]/60'} p-2 flex flex-col">
+      <div role="button" tabindex="0" data-act="cal-day" data-date="${ds}" class="cursor-pointer text-center mb-2 hover:opacity-80"><p class="text-[10px] uppercase tracking-wider ${isT?'text-[#c0c1ff]':'text-[#64748b]'}">${isT?'hoy · ':''}${DAYS[(d.getDay()+6)%7]}</p><p class="font-headline font-bold text-lg leading-none ${isT?'text-[#c0c1ff]':''}">${d.getDate()}</p><p class="text-[9px] text-[#64748b]">${MONTHS[d.getMonth()].slice(0,3).toLowerCase()}</p></div>
+      <div class="space-y-1 mb-2">${TEAM.filter(t=>okWho(t.email)).map(mb=>`<div class="flex items-center gap-1"><span class="text-[9px] w-2.5 text-[#94A3B8]">${esc(mb.name[0])}</span><div class="flex-1">${timeline(mb.email, ds, { h:7 })}</div></div>`).join('')}</div>
+      ${c.html || '<p class="text-[10px] text-[#64748b] text-center py-3">—</p>'}
+    </div>`; }).join('');
+  return `<div class="overflow-x-auto"><div class="grid gap-1.5" style="grid-template-columns:repeat(${days.length},minmax(${days.length>3?'120px':'200px'},1fr));min-width:${days.length>3?'860px':'620px'}">${cols}</div></div>
+    ${TL_LEGEND}
+    <p class="text-[10px] text-[#64748b] mt-1">Barras: <span class="text-[#fca5a5]">rojo</span> turno de Carlos · <span class="text-[#fcd34d]">ámbar</span> turno de Raquel · <span class="text-[#e9d5ff]">lila</span> reuniones · <span class="text-[#fecdd3]">rojo claro</span> tareas con hora · ☑ tareas sin hora (pulsa la casilla para darlas por hechas). Pulsa un día para el detalle.</p>`;
+}
 function calendar(pid) {
   const { m,y } = state.cal;
   const who = state.calWho || 'todos'; const view = state.calView || 'mes';
   const okWho = (email) => who==='todos' || email===who;
   const todayS = isoDate(new Date());
   const whoChips = [['todos','Los dos']].concat(TEAM.map(t=>[t.email,t.name])).map(([id,lab])=>`<button data-act="cal-who" data-id="${esc(id)}" class="px-2.5 py-1 rounded-full text-[11px] font-semibold ${who===id?'bg-[#8083ff]/20 text-[#c0c1ff] border border-[#8083ff]/40':'text-[#94A3B8] border border-[#283449] hover:text-[#F8FAFC]'}">${esc(lab)}</button>`).join('');
-  const viewChips = [['mes','Mes'],['semana','Semana'],['dia','Día']].map(([id,lab])=>`<button data-act="cal-view" data-id="${id}" class="px-3 py-1 rounded-md text-[11px] font-semibold ${view===id?'bg-[#8083ff] text-white':'text-[#94A3B8] hover:text-[#F8FAFC]'}">${lab}</button>`).join('');
-  const titulo = view==='dia' ? new Date((state.calDay||todayS)+'T12:00:00').toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'}) : view==='semana' ? 'Semana '+isoWeekKey(state.week).split('-W')[1] : MONTHS[m]+' '+y;
+  const viewChips = [['mes','Mes'],['semana','Semana'],['3dias','3 días'],['dia','Día']].map(([id,lab])=>`<button data-act="cal-view" data-id="${id}" class="px-3 py-1 rounded-md text-[11px] font-semibold ${view===id?'bg-[#8083ff] text-white':'text-[#94A3B8] hover:text-[#F8FAFC]'}">${lab}</button>`).join('');
+  const d0 = new Date((state.calDay||todayS)+'T12:00:00');
+  const fmtCorto = (d) => d.toLocaleDateString('es-ES',{day:'numeric',month:'short'});
+  const titulo = view==='dia' ? d0.toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'})
+    : view==='semana' ? 'Semana '+isoWeekKey(state.week).split('-W')[1]+' · '+fmtCorto(state.week)+' – '+fmtCorto(addDays(state.week,6))
+    : view==='3dias' ? fmtCorto(d0)+' – '+fmtCorto(addDays(d0,2))
+    : MONTHS[m]+' '+y;
   const header = `<div class="flex items-center justify-between mb-3 gap-2 flex-wrap">
     <div class="flex items-center gap-1"><button data-act="cal-prev" class="w-8 h-8 rounded-lg bg-[#0d1528] border border-[#283449] text-[#94A3B8]">‹</button><h3 class="font-headline font-bold px-1 capitalize">${esc(titulo)}</h3><button data-act="cal-next" class="w-8 h-8 rounded-lg bg-[#0d1528] border border-[#283449] text-[#94A3B8]">›</button><button data-act="cal-today" class="ml-1 px-3 h-8 rounded-lg bg-[#0d1528] border border-[#283449] text-[#94A3B8] text-xs">Hoy</button></div>
     <div class="flex items-center gap-2 flex-wrap"><div class="inline-flex p-0.5 rounded-lg bg-[#0d1528] border border-[#283449] gap-0.5">${viewChips}</div><div class="flex items-center gap-1">${whoChips}</div></div>
   </div>`;
-  if (view==='semana') return header + planGrid(pid).replace('<div class="fh-card rounded-2xl p-4">','<div>');
+  if (view==='semana') return header + calColumns([0,1,2,3,4,5,6].map(i=>addDays(state.week,i)), pid, okWho);
+  if (view==='3dias') return header + calColumns([0,1,2].map(i=>addDays(d0,i)), pid, okWho);
   if (view==='dia') return header + dayBoardFor(state.calDay||todayS, pid, false).replace('<div class="fh-card rounded-2xl p-4">','<div>');
 
-  const BAR = { 'carlosgalera2roman@gmail.com':'bg-[#EF4444] text-white', 'raquelft87@gmail.com':'bg-[#F59E0B] text-[#0b1326]' };
-  const hh = (t) => { const [h,mi]=String(t||'').split(':'); return mi==='00'||!mi ? String(+h) : (+h)+':'+mi; };
-  const corto = (l) => String(l||'Trabajo').replace(/centro de salud\s*/i,'').replace(/\s+/g,' ').trim().toUpperCase().slice(0,16);
-  const barsFor = (mb, ds) => { const ini = mb.name[0]; const av = availOf(mb.email, ds); const st = av && av.status; const base = BAR[mb.email] || 'bg-[#EF4444] text-white';
-    if (st==='guardia') return [[ini+' · GUARDIA 24h','bg-[#7f1d1d] text-[#fecaca]']];
-    if (st==='ocupado') return [[ini+' · OCUPADO', base]];
-    if (st==='manana') return [[ini+' · OCUPADO 8–15', base]];
-    if (st==='tarde') return [[ini+' · OCUPADO 15–22', base]];
-    if (st==='vacaciones') return [[ini+' · DÍA LIBRE','bg-[#4edea3]/25 text-[#4edea3]']];
-    return state.schedule.filter(x=>x.email===mb.email && +x.weekday===weekdayOf(ds)).map(x=>[ini+' · '+corto(x.label)+' '+hh(x.start_time)+'–'+hh(x.end_time), base]); };
   const total=new Date(y,m+1,0).getDate(), offset=(new Date(y,m,1).getDay()+6)%7;
   let cells=''; for(let i=0;i<offset;i++) cells+='<div></div>';
   for(let d=1;d<=total;d++){ const ds=`${y}-${pad(m+1)}-${pad(d)}`, isT=ds===todayS;
-    const bars = TEAM.filter(t=>okWho(t.email)).flatMap(mb=>barsFor(mb,ds));
-    const ms = state.events.filter(e=>e.date===ds && (!pid || e.type==='proj:'+pid)).sort((a,b)=>String(a.time||'99').localeCompare(String(b.time||'99')));
-    const ts = state.tasks.filter(t=>!t.completed && String(t.dueDate||'').slice(0,10)===ds && (!pid || t.category===pid) && okWho(t.assignee||'')).sort((a,b)=>String(a.due_time||'99').localeCompare(String(b.due_time||'99')));
-    const chips = ms.map(e=>({ t:(e.time?e.time+' ':'')+'📅 '+e.title, cls:'bg-[#a78bfa]/20 text-[#e9d5ff]', dot:'bg-[#a78bfa]' }))
-      .concat(ts.filter(t=>t.due_time).map(t=>({ t:t.due_time+' '+(TEAM_NAME[t.assignee]?TEAM_NAME[t.assignee][0]+' · ':'')+t.title, cls:'bg-[#f43f5e]/15 text-[#fecdd3]', dot:'bg-[#f43f5e]' })));
-    const sinHora = ts.filter(t=>!t.due_time).length;
-    const hasMtg = ms.length>0;
-    cells+=`<div role="button" tabindex="0" data-act="cal-day" data-date="${ds}" class="min-h-[132px] p-1.5 rounded-xl border cursor-pointer transition-colors ${isT?'border-[#8083ff] bg-[#8083ff]/10':hasMtg?'border-[#a78bfa]/60 hover:border-[#a78bfa]':'border-[#283449]/60 hover:border-[#334155]'} flex flex-col">
+    const c = dayCell(ds, pid, okWho, 3);
+    cells+=`<div role="button" tabindex="0" data-act="cal-day" data-date="${ds}" class="min-h-[132px] p-1.5 rounded-xl border cursor-pointer transition-colors ${isT?'border-[#8083ff] bg-[#8083ff]/10':c.hasMtg?'border-[#a78bfa]/60 hover:border-[#a78bfa]':'border-[#283449]/60 hover:border-[#334155]'} flex flex-col">
       <span class="text-xs font-bold ${isT?'text-[#c0c1ff]':'text-[#F8FAFC]'} mb-1">${d}</span>
-      ${bars.map(([txt,cls])=>`<div class="text-[9px] font-bold tracking-wide px-1.5 py-1 rounded-md mb-0.5 truncate ${cls}" title="${esc(txt)}">${esc(txt)}</div>`).join('')}
-      ${chips.slice(0,3).map(c=>`<div class="flex items-center gap-1 text-[10px] leading-tight px-1.5 py-0.5 rounded-md mt-0.5 ${c.cls}" title="${esc(c.t)}"><span class="w-1.5 h-1.5 rounded-full ${c.dot} shrink-0"></span><span class="truncate">${esc(c.t)}</span></div>`).join('')}
-      ${chips.length>3?`<span class="text-[9px] text-[#94A3B8] px-1 mt-0.5">+${chips.length-3} más</span>`:''}
-      ${sinHora?`<span class="mt-auto self-start text-[9px] px-1.5 py-0.5 rounded-md bg-[#8083ff]/15 text-[#c0c1ff] mt-1">☑ ${sinHora} tarea${sinHora>1?'s':''}</span>`:''}
+      ${c.html}
     </div>`; }
   return header + `<div class="grid grid-cols-7 gap-1 mb-1">${DAYS.map(d=>`<div class="text-center text-[10px] font-semibold text-[#64748b] py-1">${d}</div>`).join('')}</div>
     <div class="grid grid-cols-7 gap-1.5">${cells}</div>
@@ -1280,10 +1307,10 @@ document.addEventListener('click', async (e) => {
   if (a==='proj'){ state.selectedProject=id||null; state.section='overview'; state.sidebar=false; state.notifOpen=false; if(state.gh){state.gh=null;} try{ history.replaceState(null,'', id?'#'+id:location.pathname); }catch(_){} render(); return; }
   if (a==='new-proj'){ await addProject(); return; }
   if (a==='del-proj'){ await deleteProject(id); return; }
-  if (a==='cal-prev'){ if(state.calView==='semana'){ state.week=addDays(state.week,-7); } else if(state.calView==='dia'){ state.calDay=isoDate(addDays(new Date((state.calDay||isoDate(new Date()))+'T12:00:00'),-1)); } else { if(state.cal.m===0){state.cal.m=11;state.cal.y--;}else state.cal.m--; } render(); return; }
-  if (a==='cal-next'){ if(state.calView==='semana'){ state.week=addDays(state.week,7); } else if(state.calView==='dia'){ state.calDay=isoDate(addDays(new Date((state.calDay||isoDate(new Date()))+'T12:00:00'),1)); } else { if(state.cal.m===11){state.cal.m=0;state.cal.y++;}else state.cal.m++; } render(); return; }
+  if (a==='cal-prev'){ if(state.calView==='semana'){ state.week=addDays(state.week,-7); } else if(state.calView==='3dias'){ state.calDay=isoDate(addDays(new Date((state.calDay||isoDate(new Date()))+'T12:00:00'),-3)); } else if(state.calView==='dia'){ state.calDay=isoDate(addDays(new Date((state.calDay||isoDate(new Date()))+'T12:00:00'),-1)); } else { if(state.cal.m===0){state.cal.m=11;state.cal.y--;}else state.cal.m--; } render(); return; }
+  if (a==='cal-next'){ if(state.calView==='semana'){ state.week=addDays(state.week,7); } else if(state.calView==='3dias'){ state.calDay=isoDate(addDays(new Date((state.calDay||isoDate(new Date()))+'T12:00:00'),3)); } else if(state.calView==='dia'){ state.calDay=isoDate(addDays(new Date((state.calDay||isoDate(new Date()))+'T12:00:00'),1)); } else { if(state.cal.m===11){state.cal.m=0;state.cal.y++;}else state.cal.m++; } render(); return; }
   if (a==='cal-today'){ const n=new Date(); state.cal={m:n.getMonth(),y:n.getFullYear()}; state.week=mondayOf(n); state.calDay=isoDate(n); render(); return; }
-  if (a==='cal-view'){ state.calView=id; if(id==='dia'&&!state.calDay) state.calDay=isoDate(new Date()); render(); return; }
+  if (a==='cal-view'){ state.calView=id; if((id==='dia'||id==='3dias')&&!state.calDay) state.calDay=isoDate(new Date()); render(); return; }
   if (a==='cal-day'){ const ds=el.dataset.date; state.calDay=ds; state.week=mondayOf(new Date(ds+'T12:00:00')); state.calView='dia'; render(); return; }
   if (a==='ghtab'){ state.ghTab=id; render(); return; }
   if (a==='gh-reload'){ loadGithub(); return; }
