@@ -51,7 +51,7 @@
 const SUPA_URL = 'https://igvadjgjpyuvzailjqwg.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlndmFkamdqcHl1dnphaWxqcXdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NDI3MTAsImV4cCI6MjA4ODAxODcxMH0.eAqKCHDzrkvMTseaBP0I_JICP1owX60-cp3agYqRz4Q';
 const DEFAULT_REPO = 'carlosgalera-a11y/filehub2026';
-const APP_VERSION = 22; // mantener igual que CACHE en sw.js (workspace-vNN)
+const APP_VERSION = 23; // mantener igual que CACHE en sw.js (workspace-vNN)
 // URL propia (dinámica): funciona en github.io/workspace/ Y en el dominio propio.
 const APP_URL = (typeof location !== 'undefined' && location.origin) ? (location.origin + location.pathname) : 'https://filehubworksplace.com/';
 const CAL_URL = 'https://carlosgalera-a11y.github.io/calendario.html';
@@ -1115,9 +1115,8 @@ async function createFromAssist(p){
   if (p.kind==='goal') {
     if (!p.period) { p.period='week'; p.period_key=isoWeekKey(state.week); }
     const row = { id:'goal-'+uid(), project_id:p.project_id||'', title:p.title, period:p.period, period_key:p.period_key, owner:p.assignee||'', done:false, created_by:me(), created_at:now };
-    state.goals.push(row); render();
-    const { error } = await sb.from('ws_goals').insert(row); if (error) { alert('No se pudo guardar el objetivo: '+error.message); await refreshData(); return; }
-    toast('🎯 Objetivo añadido'); return;
+    const { error } = await sb.from('ws_goals').insert(row); if (error) { alert('No se pudo guardar el objetivo: '+error.message); return; }
+    state.goals.push(row); render(); toast('🎯 Objetivo añadido'); return;
   }
   const d = p.date ? isoDate(p.date) : null;
   if (p.kind==='meeting') {
@@ -1303,9 +1302,19 @@ function renderLogin() {
 }
 
 /* ── eventos ── */
+function avisoError(donde, err){
+  const msg = String((err && (err.message || err.reason && err.reason.message)) || err || 'error');
+  console.error('[workspace]', donde, err);
+  const t=document.createElement('div'); t.textContent='⚠️ '+donde+': '+msg.slice(0,160); t.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#EF4444;color:#fff;padding:10px 18px;border-radius:12px;z-index:999;font-size:13px;max-width:90vw;box-shadow:0 8px 24px rgba(0,0,0,.4)'; document.body.appendChild(t); setTimeout(()=>t.remove(),6000);
+}
+window.addEventListener('error', (e) => avisoError('Error en la app', e.error || e.message));
+window.addEventListener('unhandledrejection', (e) => avisoError('Error en la app', e.reason));
 document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-act]'); if(!el) return;
   const a = el.dataset.act, id = el.dataset.id;
+  try { await manejarClick(a, id, el, e); } catch(err) { avisoError('Acción «'+a+'»', err); }
+});
+async function manejarClick(a, id, el, e){
   if (a==='login'){
     // Vuelve a la raíz limpia (sin ancla): con «#proj-xxx» en el redirectTo, el token de Google no se leía.
     try { const h=(location.hash||'').replace(/^#/,''); if (h && !/access_token=/.test(h)) sessionStorage.setItem('ws_after_login', h); } catch(_){}
@@ -1356,7 +1365,7 @@ document.addEventListener('click', async (e) => {
   if (a==='add-mtg-global'){ await addMeetingGlobal(); return; }
   if (a==='open-file'){ const path=el.dataset.path; if(!path) return; e.preventDefault(); try{ const { data, error }=await sb.storage.from('files').createSignedUrl(path,3600); if(error) throw error; window.open(data.signedUrl,'_blank','noopener'); }catch(err){ alert('No se pudo abrir el archivo: '+(err&&err.message||err)); } return; }
   if (a==='upload'){ pickFile(id||state.selectedProject); return; }
-});
+}
 document.addEventListener('change', async (e) => {
   const el = e.target.closest('[data-act]'); if(!el) return;
   if (el.dataset.act==='proj-progress') await updateProject(el.dataset.id,{progress:Number(el.value)});
@@ -1396,7 +1405,7 @@ function renderDenied(email){
     const { data:{ session } } = await sb.auth.getSession();
     if (!session) renderLogin();
     else if (!ALLOWED.has((session.user.email||'').toLowerCase())) renderDenied(session.user.email);
-    else { state.user=session.user; await loadAll(); pickInitialProject(); render(); subscribeRealtime(); checkUpdate(); }
+    else { state.user=session.user; await loadAll(); pickInitialProject(); render(); subscribeRealtime(); checkUpdate(); setInterval(checkUpdate, 5*60*1000); }
   } catch(e){ $app.innerHTML = `<div class="min-h-screen flex items-center justify-center p-6 text-center text-[#94A3B8]"><div><p class="text-lg font-headline">No se pudo cargar</p><p class="text-sm mt-2">${esc(String(e&&e.message||e))}</p></div></div>`; }
   sb.auth.onAuthStateChange((_e,sess)=>{ if(sess&&!state.user){ if(!ALLOWED.has((sess.user.email||'').toLowerCase())){renderDenied(sess.user.email);return;} state.user=sess.user; loadAll().then(()=>{pickInitialProject(); render(); subscribeRealtime();});} else if(!sess&&state.user){state.user=null; renderLogin();} });
 })();
