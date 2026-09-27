@@ -51,7 +51,7 @@
 const SUPA_URL = 'https://igvadjgjpyuvzailjqwg.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlndmFkamdqcHl1dnphaWxqcXdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NDI3MTAsImV4cCI6MjA4ODAxODcxMH0.eAqKCHDzrkvMTseaBP0I_JICP1owX60-cp3agYqRz4Q';
 const DEFAULT_REPO = 'carlosgalera-a11y/filehub2026';
-const APP_VERSION = 21; // mantener igual que CACHE en sw.js (workspace-vNN)
+const APP_VERSION = 22; // mantener igual que CACHE en sw.js (workspace-vNN)
 // URL propia (dinámica): funciona en github.io/workspace/ Y en el dominio propio.
 const APP_URL = (typeof location !== 'undefined' && location.origin) ? (location.origin + location.pathname) : 'https://filehubworksplace.com/';
 const CAL_URL = 'https://carlosgalera-a11y.github.io/calendario.html';
@@ -822,8 +822,11 @@ async function addTaskFull(){
   try { await sb.from('ws_tasks').insert(row); } catch(_){}
 }
 async function delTask(id){
-  state.tasks=state.tasks.filter(t=>t.id!==id); render();
-  try { await sb.from('ws_tasks').delete().eq('id',id); } catch(_){}
+  const t = state.tasks.find(x=>x.id===id); if (!t) return;
+  if (!window.confirm('¿Eliminar la tarea «'+t.title+'»?')) return;
+  state.tasks=state.tasks.filter(x=>x.id!==id); render();
+  const { error } = await sb.from('ws_tasks').delete().eq('id',id);
+  if (error) { alert('No se pudo eliminar la tarea: '+error.message); await refreshData(); } else toast('Tarea eliminada');
 }
 
 /* ══ Plan semanal: disponibilidad, objetivos por semana/mes y asistente ══ */
@@ -908,6 +911,7 @@ function personCards(pid){
         <button data-act="stage" data-id="${esc(t.id)}" data-stage="hecho" title="Marcar hecha" class="mt-0.5 w-4 h-4 rounded border border-[#334155] hover:border-[#4edea3] hover:bg-[#4edea3]/20 shrink-0"></button>
         <div class="flex-1 min-w-0"><p class="text-[12px] leading-snug ${late?'text-[#fca5a5]':'text-[#F8FAFC]'}">${esc(t.title)}</p>
         <div class="flex items-center gap-1 flex-wrap mt-0.5">${db?`<span class="text-[9px] px-1.5 py-0.5 rounded-full ${db[1]}">${esc(db[0])}${t.due_time?' '+esc(t.due_time):''}</span>`:'<span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#131b2e] border border-[#283449] text-[#64748b]">sin fecha</span>'}${pj(t)?`<span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#8083ff]/10 text-[#c0c1ff]">${esc(pj(t))}</span>`:''}${t.stage==='en_curso'?'<span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#8083ff]/20 text-[#c0c1ff]">en curso</span>':''}</div></div>
+        <button data-act="del-task" data-id="${esc(t.id)}" title="Eliminar tarea" class="text-[#64748b] hover:text-[#EF4444] text-xs shrink-0">🗑</button>
       </div>`; };
     const grow = (g) => `<div class="flex items-start gap-2 py-1 ${g.done?'opacity-50':''}">
         <button data-act="goal-toggle" data-id="${esc(g.id)}" class="mt-0.5 w-4 h-4 rounded border flex items-center justify-center shrink-0 ${g.done?'bg-[#4edea3] border-[#4edea3]':'border-[#334155] hover:border-[#4edea3]'}">${g.done?'<span class="text-[#0b1326] text-[9px]">✓</span>':''}</button>
@@ -930,6 +934,10 @@ function personCards(pid){
       <p class="text-[10px] font-semibold text-[#64748b] uppercase tracking-wider mt-3">📋 Tareas pendientes</p>
       <div class="divide-y divide-[#283449]/50">${semana.concat(luego).slice(0,MAX).map(trow).join('') || '<p class="text-[11px] text-[#64748b] py-1.5">Nada pendiente 🎉</p>'}</div>
       ${tasks.length>MAX?`<button data-act="sec" data-id="pendientes" class="text-[10px] text-[#8083ff] underline mt-1">+${tasks.length-MAX} más en «Quién tiene qué»</button>`:''}
+      <div class="flex items-center gap-1.5 mt-1.5">
+        <input id="task-input-p-${esc(mb.email)}" data-email="${esc(mb.email)}" placeholder="＋ Tarea para ${esc(mb.name)}… (p. ej. «llamar al gestor el martes a las 10»)" autocomplete="off" class="flex-1 min-w-0 bg-[#0d1528] border border-[#283449] rounded-lg text-[12px] px-2.5 py-1.5 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]" />
+        <button data-act="task-add-p" data-email="${esc(mb.email)}" title="Añadir tarea" class="shrink-0 w-8 h-8 rounded-lg bg-[#f43f5e]/20 text-[#fecdd3] hover:bg-[#f43f5e] hover:text-white text-base leading-none">＋</button>
+      </div>
     </div>`;
   };
   const sinAsignar = state.tasks.filter(t => !t.completed && !TEAM_NAME[t.assignee] && (!pid || t.category===pid)).length;
@@ -1005,11 +1013,21 @@ async function cycleAvail(email, d){
 }
 async function toggleGoal(id){
   const g = state.goals.find(x=>x.id===id); if(!g) return; g.done=!g.done; render();
-  try { await sb.from('ws_goals').update({ done:g.done }).eq('id',id); } catch(_){}
+  const { error } = await sb.from('ws_goals').update({ done:g.done }).eq('id',id);
+  if (error) { alert('No se pudo guardar: '+error.message); await refreshData(); }
 }
 async function delGoal(id){
+  const g = state.goals.find(x=>x.id===id); if (!g) return;
+  if (!window.confirm('¿Eliminar el objetivo «'+g.title+'»?')) return;
   state.goals = state.goals.filter(x=>x.id!==id); render();
-  try { await sb.from('ws_goals').delete().eq('id',id); } catch(_){}
+  const { error } = await sb.from('ws_goals').delete().eq('id',id);
+  if (error) { alert('No se pudo eliminar el objetivo: '+error.message); await refreshData(); } else toast('Objetivo eliminado');
+}
+async function addTaskFor(email){
+  const inp = document.getElementById('task-input-p-'+email); const text=(inp&&inp.value||'').trim(); if(!text) return;
+  const p = parseAssist(text); if (p.kind==='goal') p.kind='task'; p.assignee = email;
+  await createFromAssist(p);
+  const i2 = document.getElementById('task-input-p-'+email); if (i2) { i2.value=''; i2.focus(); }
 }
 async function addGoalFor(email){
   const inp = document.getElementById('goal-input-p-'+email); const text=(inp&&inp.value||'').trim(); if(!text) return;
@@ -1327,6 +1345,7 @@ document.addEventListener('click', async (e) => {
   if (a==='goal-toggle'){ await toggleGoal(id); return; }
   if (a==='goal-del'){ await delGoal(id); return; }
   if (a==='goal-add-p'){ await addGoalFor(el.dataset.email); return; }
+  if (a==='task-add-p'){ await addTaskFor(el.dataset.email); return; }
   if (a==='assist-add'){ await assistAdd(); return; }
   if (a==='cal-who'){ state.calWho=id; render(); return; }
   if (a==='update-app'){ await updateApp(); return; }
@@ -1358,6 +1377,7 @@ document.addEventListener('keydown', (e) => {
   if (e.target.id==='assist-input') { e.preventDefault(); assistAdd(); }
   if (e.target.id==='goal-input-week') { e.preventDefault(); addGoal('week'); }
   if (e.target.id && e.target.id.startsWith('goal-input-p-')) { e.preventDefault(); addGoalFor(e.target.dataset.email); }
+  if (e.target.id && e.target.id.startsWith('task-input-p-')) { e.preventDefault(); addTaskFor(e.target.dataset.email); }
   if (e.target.id==='goal-input-month') { e.preventDefault(); addGoal('month'); }
 });
 
