@@ -4,7 +4,7 @@
  * - NUNCA cachea Supabase ni la GitHub API (datos en vivo / sesión).
  * - Cache-first para el shell estático (CDNs, fuentes, iconos).
  */
-const CACHE = 'workspace-v23';
+const CACHE = 'workspace-v24';
 const NO_CACHE = ['supabase.co', 'api.github.com'];
 
 self.addEventListener('install', (e) => {

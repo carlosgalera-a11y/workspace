@@ -51,7 +51,7 @@
 const SUPA_URL = 'https://igvadjgjpyuvzailjqwg.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlndmFkamdqcHl1dnphaWxqcXdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NDI3MTAsImV4cCI6MjA4ODAxODcxMH0.eAqKCHDzrkvMTseaBP0I_JICP1owX60-cp3agYqRz4Q';
 const DEFAULT_REPO = 'carlosgalera-a11y/filehub2026';
-const APP_VERSION = 23; // mantener igual que CACHE en sw.js (workspace-vNN)
+const APP_VERSION = 24; // mantener igual que CACHE en sw.js (workspace-vNN)
 // URL propia (dinámica): funciona en github.io/workspace/ Y en el dominio propio.
 const APP_URL = (typeof location !== 'undefined' && location.origin) ? (location.origin + location.pathname) : 'https://filehubworksplace.com/';
 const CAL_URL = 'https://carlosgalera-a11y.github.io/calendario.html';
@@ -84,6 +84,7 @@ const fmtDay = (d) => d.toLocaleDateString('es-ES',{weekday:'short',day:'numeric
 const state = {
   user: null, projects: [], tasks: [], events: [], files: [], updates: [], members: [], goals: [], avail: [],
   week: mondayOf(new Date()), calWho: 'todos', calView: 'mes', calDay: null, updateAvail: false, schedule: [],
+  upStart: null, upRange: '14d',
   section: 'overview', selectedProject: null,
   gh: null, ghLoading: false, ghTab: 'commits',
   cal: { m: new Date().getMonth(), y: new Date().getFullYear() },
@@ -296,7 +297,8 @@ async function uploadFile(pid, file) {
     const p = proj(pid);
     const row = { id:'file-'+uid(), project_id:pid, name:file.name, url:data.publicUrl, storage_path:path, created_by: me(), created_at:new Date().toISOString() };
     state.files.unshift({ ...row, folder: p?p.name:'Workspace', tags:['proj:'+pid] });
-    await sb.from('ws_files').insert(row);
+    const { error: eRow } = await sb.from('ws_files').insert(row); if (eRow) throw eRow;
+    toast('📎 «'+file.name+'» subido a '+(p?p.name:'Workspace'));
   } catch(e){ alert('Error subiendo el archivo: '+(e&&e.message||e)); }
   state.uploading=false; render();
 }
@@ -948,29 +950,43 @@ function personCards(pid){
 }
 /* Próximos días: línea de tiempo horizontal con reuniones (lila) y tareas con fecha (rojo). */
 function upcomingTimeline(pid){
-  const N = 14; const today = new Date(); today.setHours(0,0,0,0);
-  const days = Array.from({length:N},(_,i)=>addDays(today,i));
-  const items = (ds) => {
-    const ms = state.events.filter(e=>e.date===ds && (!pid || e.type==='proj:'+pid)).sort((a,b)=>String(a.time||'99').localeCompare(String(b.time||'99')))
-      .map(e=>({ t:(e.time?e.time+' ':'')+e.title, cls:'bg-[#a78bfa]/25 text-[#e9d5ff] border border-[#a78bfa]/40', mtg:true }));
-    const ts = state.tasks.filter(t=>!t.completed && String(t.dueDate||'').slice(0,10)===ds && (!pid || t.category===pid)).sort((a,b)=>String(a.due_time||'99').localeCompare(String(b.due_time||'99')))
-      .map(t=>({ t:(t.due_time?t.due_time+' ':'')+(TEAM_NAME[t.assignee]?TEAM_NAME[t.assignee][0]+' · ':'')+t.title, cls:'bg-[#f43f5e]/20 text-[#fecdd3] border border-[#f43f5e]/40' }));
-    const av = TEAM.map(mb=>({ mb, a:availOf(mb.email,ds) })).filter(x=>x.a && ['guardia','vacaciones','ocupado'].includes(x.a.status))
-      .map(x=>({ t:x.mb.name[0]+' · '+AVAIL[x.a.status][0], cls:AVAIL[x.a.status][1] }));
-    return ms.concat(ts, av);
-  };
-  const total = days.reduce((n,d)=>n+items(isoDate(d)).length,0);
-  const col = (d,i) => { const ds=isoDate(d); const its=items(ds); const isT=i===0; const hasMtg=its.some(x=>x.mtg);
-    return `<div class="relative shrink-0 w-[132px] ${i?'':'ml-1'}">
-      <div class="flex flex-col items-center"><span class="text-[9px] uppercase tracking-wider ${isT?'text-[#c0c1ff]':'text-[#64748b]'}">${isT?'hoy':DAYS[(d.getDay()+6)%7]}</span><span class="font-headline font-bold text-sm ${isT?'text-[#c0c1ff]':''}">${d.getDate()} ${MONTHS[d.getMonth()].slice(0,3).toLowerCase()}</span>
-        <span class="w-3 h-3 rounded-full border-2 ${hasMtg?'bg-[#a78bfa] border-[#a78bfa]':its.length?'bg-[#f43f5e] border-[#f43f5e]':'bg-[#0b1326] border-[#334155]'} ${isT?'ring-2 ring-[#8083ff]/50':''} mt-1 relative z-10"></span></div>
-      <div class="space-y-1 mt-2 px-1">${its.slice(0,4).map(x=>`<div class="text-[10px] leading-tight px-1.5 py-1 rounded-md ${x.cls} truncate" title="${esc(x.t)}">${esc(x.t)}</div>`).join('')}${its.length>4?`<p class="text-[9px] text-[#64748b] text-center">+${its.length-4}</p>`:''}</div>
+  const today = new Date(); today.setHours(0,0,0,0);
+  const range = state.upRange || '14d';
+  const start = state.upStart ? new Date(state.upStart+'T00:00:00') : today;
+  const RANGES = { '14d':{ label:'14 días', days:14, by:'day' }, '1m':{ label:'1 mes', days:31, by:'day' }, '3m':{ label:'3 meses', days:91, by:'week' }, '10m':{ label:'10 meses', days:305, by:'month' } };
+  const R = RANGES[range] || RANGES['14d'];
+  const end = addDays(start, R.days);
+  const startS = isoDate(start), endS = isoDate(end), todayS = isoDate(today);
+  // todos los elementos del rango, con su fecha
+  const items = [];
+  state.events.filter(e=>e.date && e.date>=startS && e.date<endS && (!pid || e.type==='proj:'+pid)).forEach(e=>items.push({ ds:e.date, key:String(e.time||'99'), t:(e.time?e.time+' ':'')+e.title, cls:'bg-[#a78bfa]/25 text-[#e9d5ff] border border-[#a78bfa]/40', mtg:true }));
+  state.tasks.filter(t=>!t.completed && t.dueDate && String(t.dueDate).slice(0,10)>=startS && String(t.dueDate).slice(0,10)<endS && (!pid || t.category===pid)).forEach(t=>items.push({ ds:String(t.dueDate).slice(0,10), key:String(t.due_time||'99'), t:(t.due_time?t.due_time+' ':'')+(TEAM_NAME[t.assignee]?TEAM_NAME[t.assignee][0]+' · ':'')+t.title, cls:'bg-[#f43f5e]/20 text-[#fecdd3] border border-[#f43f5e]/40' }));
+  state.avail.filter(a=>a.date>=startS && a.date<endS && ['guardia','vacaciones','ocupado'].includes(a.status)).forEach(a=>{ const mb=TEAM.find(x=>x.email===a.email); if(mb) items.push({ ds:a.date, key:'00', t:mb.name[0]+' · '+AVAIL[a.status][0], cls:AVAIL[a.status][1] }); });
+  state.goals.filter(g=>!g.done && g.period==='month' && (!pid || g.project_id===pid)).forEach(g=>{ const [yy,mm]=g.period_key.split('-'); const ds=yy+'-'+mm+'-01'; if(ds>=startS.slice(0,8)+'01' && ds<endS) items.push({ ds, key:'zz', t:'🎯 '+(TEAM_NAME[g.owner]?TEAM_NAME[g.owner][0]+' · ':'')+g.title+' (mes)', cls:'bg-[#4edea3]/15 text-[#4edea3] border border-[#4edea3]/30', goal:true }); });
+  items.sort((a,b)=>(a.ds+a.key).localeCompare(b.ds+b.key));
+  // columnas según granularidad
+  let cols = [];
+  if (R.by==='day') { for (let i=0;i<R.days;i++){ const d=addDays(start,i); const ds=isoDate(d); cols.push({ from:ds, to:ds, head:`<p class="text-[9px] uppercase tracking-wider ${ds===todayS?'text-[#c0c1ff]':'text-[#64748b]'}">${ds===todayS?'hoy':DAYS[(d.getDay()+6)%7]}</p><p class="font-headline font-bold text-sm ${ds===todayS?'text-[#c0c1ff]':''}">${d.getDate()} ${MONTHS[d.getMonth()].slice(0,3).toLowerCase()}</p>`, isT:ds===todayS, w:132, showDay:false }); } }
+  else if (R.by==='week') { let d=mondayOf(start); while (d<end){ const a=isoDate(d), b=isoDate(addDays(d,6)); const isT = todayS>=a && todayS<=b; cols.push({ from:a, to:b, head:`<p class="text-[9px] uppercase tracking-wider ${isT?'text-[#c0c1ff]':'text-[#64748b]'}">${isT?'esta semana':'sem '+isoWeekKey(d).split('-W')[1]}</p><p class="font-headline font-bold text-sm ${isT?'text-[#c0c1ff]':''}">${d.getDate()} ${MONTHS[d.getMonth()].slice(0,3).toLowerCase()} – ${addDays(d,6).getDate()} ${MONTHS[addDays(d,6).getMonth()].slice(0,3).toLowerCase()}</p>`, isT, w:160, showDay:true }); d=addDays(d,7); } }
+  else { let d=new Date(start.getFullYear(), start.getMonth(), 1); while (d<end){ const a=isoDate(d), last=new Date(d.getFullYear(), d.getMonth()+1, 0), b=isoDate(last); const isT = todayS>=a && todayS<=b; cols.push({ from:a, to:b, head:`<p class="text-[9px] uppercase tracking-wider ${isT?'text-[#c0c1ff]':'text-[#64748b]'}">${isT?'este mes':d.getFullYear()}</p><p class="font-headline font-bold text-sm ${isT?'text-[#c0c1ff]':''}">${MONTHS[d.getMonth()]}</p>`, isT, w:170, showDay:true }); d=new Date(d.getFullYear(), d.getMonth()+1, 1); } }
+  const MAX = R.by==='day' ? 4 : R.by==='week' ? 6 : 8;
+  const col = (c) => { const its = items.filter(x=>x.ds>=c.from && x.ds<=c.to); const hasMtg = its.some(x=>x.mtg);
+    const label = (x) => c.showDay ? `<span class="text-[#94A3B8]">${+x.ds.slice(8,10)}${R.by==='month'?'':''}</span> ${esc(x.t)}` : esc(x.t);
+    return `<div class="relative shrink-0" style="width:${c.w}px">
+      <div role="button" tabindex="0" data-act="cal-day" data-date="${c.from}" class="flex flex-col items-center cursor-pointer hover:opacity-80">${c.head}
+        <span class="w-3 h-3 rounded-full border-2 ${hasMtg?'bg-[#a78bfa] border-[#a78bfa]':its.length?'bg-[#f43f5e] border-[#f43f5e]':'bg-[#0b1326] border-[#334155]'} ${c.isT?'ring-2 ring-[#8083ff]/50':''} mt-1 relative z-10"></span></div>
+      <div class="space-y-1 mt-2 px-1">${its.slice(0,MAX).map(x=>`<div class="text-[10px] leading-tight px-1.5 py-1 rounded-md ${x.cls} truncate" title="${esc(x.ds)} · ${esc(x.t)}">${label(x)}</div>`).join('')}${its.length>MAX?`<p class="text-[9px] text-[#64748b] text-center">+${its.length-MAX}</p>`:''}</div>
     </div>`; };
+  const rangeChips = Object.entries(RANGES).map(([id,r])=>`<button data-act="up-range" data-id="${id}" class="px-2.5 py-1 rounded-md text-[11px] font-semibold ${range===id?'bg-[#8083ff] text-white':'text-[#94A3B8] hover:text-[#F8FAFC]'}">${r.label}</button>`).join('');
+  const fmt = (d) => d.toLocaleDateString('es-ES',{day:'numeric',month:'short'}) + (d.getFullYear()!==today.getFullYear()?' '+d.getFullYear():'');
   return `<div class="fh-card rounded-2xl p-4">
-    <div class="flex items-center justify-between mb-2 gap-2 flex-wrap"><h3 class="font-headline font-bold text-sm">⏳ Próximos ${N} días</h3><span class="text-[10px] text-[#64748b]">${total} evento(s) y tarea(s) · <span class="text-[#e9d5ff]">lila</span> reuniones y eventos destacados · <span class="text-[#fecdd3]">rojo</span> tareas</span></div>
-    <div class="overflow-x-auto pb-1"><div class="relative flex" style="min-width:${N*132}px">
+    <div class="flex items-center justify-between mb-2 gap-2 flex-wrap">
+      <div class="flex items-center gap-2 flex-wrap"><h3 class="font-headline font-bold text-sm">⏳ Línea de tiempo</h3><div class="flex items-center gap-1"><button data-act="up-prev" class="w-7 h-7 rounded-lg bg-[#0d1528] border border-[#283449] text-[#94A3B8]">‹</button><button data-act="up-today" class="px-2.5 h-7 rounded-lg bg-[#0d1528] border border-[#283449] text-[#94A3B8] text-[11px]">Hoy</button><button data-act="up-next" class="w-7 h-7 rounded-lg bg-[#0d1528] border border-[#283449] text-[#94A3B8]">›</button></div><span class="text-[11px] text-[#94A3B8]">${esc(fmt(start))} – ${esc(fmt(addDays(end,-1)))}</span></div>
+      <div class="flex items-center gap-2 flex-wrap"><div class="inline-flex p-0.5 rounded-lg bg-[#0d1528] border border-[#283449] gap-0.5">${rangeChips}</div><span class="text-[10px] text-[#64748b]">${items.length} elemento(s) · <span class="text-[#e9d5ff]">lila</span> reuniones · <span class="text-[#fecdd3]">rojo</span> tareas · <span class="text-[#4edea3]">verde</span> objetivos del mes</span></div>
+    </div>
+    <div class="overflow-x-auto pb-1"><div class="relative flex" style="min-width:${cols.reduce((n,c)=>n+c.w,0)}px">
       <div class="absolute left-0 right-0 border-t-2 border-dashed border-[#334155]" style="top:44px"></div>
-      ${days.map(col).join('')}
+      ${cols.map(col).join('')}
     </div></div>
   </div>`;
 }
@@ -1065,7 +1081,8 @@ function parseAssist(text){
   for (const p of state.projects) { const n = reEsc(noAcc(p.name)); if (!n) continue; if (cut(new RegExp(W+'(?:en|de|del|para|proyecto)\\s+'+n+Wend,'i')) || cut(new RegExp(W+n+Wend,'i'))) out.project_id = p.id; }
   if (!out.project_id) out.project_id = state.selectedProject || ((!isOwner() && state.projects.length===1) ? state.projects[0].id : null);
   // tipo
-  if (/\b(reuni[oó]n|llamada|cita|videollamada|call|quedada)\b/i.test(t)) out.kind = 'meeting';
+  if (/\b(sube|subir|subo|subeme|adjunta(?:r|me)?|carga(?:r)?)\b/i.test(t) && /\b(archivo|fichero|documento|pdf|foto|imagen|v[ií]deo|audio|presentaci[oó]n|informe)s?\b/i.test(t)) out.kind = 'file';
+  else if (/\b(reuni[oó]n|llamada|cita|videollamada|call|quedada)\b/i.test(t)) out.kind = 'meeting';
   if (cut(/\b(?:objetivo|meta)s?\b\s*:?/i)) out.kind = 'goal';
   // periodo (objetivos)
   if (cut(/\besta semana\b/i)) { out.period='week'; out.period_key=isoWeekKey(today); }
@@ -1105,11 +1122,26 @@ function assistSummary(p){
   const pj = p.project_id ? ((proj(p.project_id)||{}).name||'') : '';
   const when = p.date ? fmtDay(p.date) + (p.time ? ' '+p.time : '') : (p.kind==='task' ? 'sin fecha' : '');
   const per = p.period==='week' ? 'semana '+p.period_key.split('-W')[1] : p.period==='month' ? MONTHS[+p.period_key.split('-')[1]-1] : '';
+  if (p.kind==='file') return '📎 Subir un archivo' + (pj?' a '+pj:'') + ' (se abrirá el selector)';
   const kind = p.kind==='meeting' ? '📅 Reunión' : p.kind==='goal' ? '🎯 Objetivo' : '📋 Tarea';
   const dur = p.duration ? (p.duration%60===0 ? (p.duration/60)+' h' : p.duration+' min') : '';
   return [kind+' «'+p.title+'»', who?'👤 '+who:'', p.kind==='goal'?per:when, dur?'⏱ '+dur:'', pj].filter(Boolean).join(' · ');
 }
+/* Subida desde el asistente: elige proyecto (el abierto, el único visible o el que nombres) y abre el selector. */
+function subirDesdeAsistente(pid){
+  let target = pid || state.selectedProject || ((!isOwner() && state.projects.length===1) ? state.projects[0].id : null);
+  if (!target) {
+    const nombre = (window.prompt('¿A qué proyecto subo el archivo?\n' + state.projects.map(p=>'· '+p.name).join('\n'), (state.projects[0]||{}).name||'') || '').trim();
+    if (!nombre) return;
+    const hit = state.projects.find(p => noAcc(p.name)===noAcc(nombre)) || state.projects.find(p => noAcc(p.name).includes(noAcc(nombre)));
+    if (!hit) { toast('No encuentro el proyecto «'+nombre+'»'); return; }
+    target = hit.id;
+  }
+  toast('Elige el archivo para «'+((proj(target)||{}).name||'Workspace')+'»');
+  pickFile(target);
+}
 async function createFromAssist(p){
+  if (p.kind==='file') { subirDesdeAsistente(p.project_id); return; }
   if (!p.title) { toast('Escribe qué quieres añadir'); return; }
   const now = new Date().toISOString();
   if (p.kind==='goal') {
@@ -1144,10 +1176,11 @@ function assistBox(pid){
     <div class="flex items-center gap-2 mb-2 flex-wrap"><span>🪄</span><h3 class="font-headline font-bold text-sm">Asistente${pn?' · '+esc(pn):''}</h3><span class="text-[10px] text-[#64748b]">escribe una cita, una tarea o un objetivo y lo pongo en el calendario</span></div>
     <div class="flex items-center gap-2">
       <input id="assist-input" placeholder="${pn?`p. ej. «reunión con Raquel el martes a las 10» · «para Raquel: infografía mañana» · «objetivo esta semana: …»`:`p. ej. «reunión con Jesús el jueves 24 a las 13:00 en MediKai» · «para Raquel: infografía mañana» · «objetivo esta semana: cerrar demo»`}" class="flex-1 min-w-0 bg-[#0d1528] border border-[#283449] rounded-xl text-sm px-3.5 py-2.5 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]" autocomplete="off" />
+      <button data-act="assist-file" data-id="${esc(pid||'')}" title="Subir un archivo al proyecto" class="shrink-0 w-11 h-11 rounded-xl bg-[#0d1528] border border-[#283449] text-[#94A3B8] hover:text-[#F8FAFC] hover:border-[#8083ff] text-lg">📎</button>
       <button data-act="assist-add" class="shrink-0 px-4 py-2.5 rounded-xl bg-[#8083ff] text-white text-sm font-semibold hover:bg-[#6d70e6]">Añadir</button>
     </div>
     <p id="assist-preview" class="text-[11px] text-[#c0c1ff] mt-2 min-h-[16px]"></p>
-    <p class="text-[10px] text-[#64748b] mt-1">Entiende: hoy · mañana · el jueves · 24 de octubre · 3/10 · a las 13:00 · durante 2 horas / 30 min · para Raquel${pn?'':' · en MediKai'} · esta semana / este mes (objetivos) · «reunión» o «cita» crea una reunión en el calendario.</p>
+    <p class="text-[10px] text-[#64748b] mt-1">Entiende: hoy · mañana · el jueves · 24 de octubre · 3/10 · a las 13:00 · durante 2 horas / 30 min · para Raquel${pn?'':' · en MediKai'} · esta semana / este mes (objetivos) · «reunión» o «cita» crea una reunión en el calendario · «sube un archivo» o el 📎 abre el selector y lo guarda en Archivos del proyecto.</p>
   </div>`;
 }
 function goalsBox(period, key, title, pid){
@@ -1356,6 +1389,10 @@ async function manejarClick(a, id, el, e){
   if (a==='goal-add-p'){ await addGoalFor(el.dataset.email); return; }
   if (a==='task-add-p'){ await addTaskFor(el.dataset.email); return; }
   if (a==='assist-add'){ await assistAdd(); return; }
+  if (a==='assist-file'){ subirDesdeAsistente(id||null); return; }
+  if (a==='up-range'){ state.upRange=id; render(); return; }
+  if (a==='up-today'){ state.upStart=null; render(); return; }
+  if (a==='up-prev' || a==='up-next'){ const R={ '14d':14,'1m':31,'3m':91,'10m':305 }[state.upRange||'14d']||14; const base = state.upStart ? new Date(state.upStart+'T00:00:00') : new Date(); base.setHours(0,0,0,0); state.upStart = isoDate(addDays(base, a==='up-next'?R:-R)); render(); return; }
   if (a==='cal-who'){ state.calWho=id; render(); return; }
   if (a==='update-app'){ await updateApp(); return; }
   if (a==='sched-save'){ await saveSchedule(el.dataset.email, el.dataset.idx); return; }
