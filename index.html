@@ -51,7 +51,7 @@
 const SUPA_URL = 'https://igvadjgjpyuvzailjqwg.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlndmFkamdqcHl1dnphaWxqcXdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NDI3MTAsImV4cCI6MjA4ODAxODcxMH0.eAqKCHDzrkvMTseaBP0I_JICP1owX60-cp3agYqRz4Q';
 const DEFAULT_REPO = 'carlosgalera-a11y/filehub2026';
-const APP_VERSION = 24; // mantener igual que CACHE en sw.js (workspace-vNN)
+const APP_VERSION = 25; // mantener igual que CACHE en sw.js (workspace-vNN)
 // URL propia (dinámica): funciona en github.io/workspace/ Y en el dominio propio.
 const APP_URL = (typeof location !== 'undefined' && location.origin) ? (location.origin + location.pathname) : 'https://filehubworksplace.com/';
 const CAL_URL = 'https://carlosgalera-a11y.github.io/calendario.html';
@@ -84,7 +84,7 @@ const fmtDay = (d) => d.toLocaleDateString('es-ES',{weekday:'short',day:'numeric
 const state = {
   user: null, projects: [], tasks: [], events: [], files: [], updates: [], members: [], goals: [], avail: [],
   week: mondayOf(new Date()), calWho: 'todos', calView: 'mes', calDay: null, updateAvail: false, schedule: [],
-  upStart: null, upRange: '14d',
+  upStart: null, upRange: '14d', pacientes: [], pacFiltro: 'pendientes', pacBuscar: '',
   section: 'overview', selectedProject: null,
   gh: null, ghLoading: false, ghTab: 'commits',
   cal: { m: new Date().getMonth(), y: new Date().getFullYear() },
@@ -150,7 +150,7 @@ const taskStage = (t) => t.completed ? 'hecho' : (t.stage==='en_curso' ? 'en_cur
 /* ── data (tablas COMPARTIDAS ws_*: RLS de pareja Carlos+Raquel → los dos veis y editáis lo mismo) ── */
 const me = () => (state.user && state.user.email) || '';
 async function loadAll() {
-  const [pr,tk,mt,fi,up,mb,gl,av,sc] = await Promise.all([
+  const [pr,tk,mt,fi,up,mb,gl,av,sc,pa] = await Promise.all([
     sb.from('ws_projects').select('*').order('created_at',{ascending:true}),
     sb.from('ws_tasks').select('*').order('created_at',{ascending:false}).limit(500),
     sb.from('ws_meetings').select('*').limit(500),
@@ -160,7 +160,9 @@ async function loadAll() {
     sb.from('ws_goals').select('*').order('created_at',{ascending:true}),
     sb.from('ws_availability').select('*'),
     sb.from('ws_schedule').select('*'),
+    isOwner() ? sb.from('ws_pacientes').select('*').order('created_at',{ascending:true}) : Promise.resolve({ data: [] }),
   ]);
+  state.pacientes = pa.data || [];
   state.goals = gl.data || [];
   state.avail = av.data || [];
   state.schedule = sc.data || [];
@@ -369,7 +371,7 @@ async function subscribeRealtime(){
     // deje pasar los cambios (si no, Realtime iría como anon y no llegaría nada).
     try { const { data:{ session } } = await sb.auth.getSession(); if(session&&session.access_token&&sb.realtime&&sb.realtime.setAuth) sb.realtime.setAuth(session.access_token); } catch(_){}
     let ch = sb.channel('ws-live');
-    ['ws_projects','ws_tasks','ws_meetings','ws_updates','ws_files','ws_project_members','ws_goals','ws_availability','ws_schedule'].forEach(t=>{
+    ['ws_projects','ws_tasks','ws_meetings','ws_updates','ws_files','ws_project_members','ws_goals','ws_availability','ws_schedule'].concat(isOwner()?['ws_pacientes']:[]).forEach(t=>{
       ch = ch.on('postgres_changes', { event:'*', schema:'public', table:t }, onLiveChange);
     });
     ch.subscribe((status)=>{ const was=state._live; state._live = (status==='SUBSCRIBED'); if(state.user && was!==state._live) renderPreserve(); });
@@ -412,6 +414,7 @@ function sidebar() {
         ${sItem('reuniones','Reuniones','📅',0)}
         ${sItem('calendario','Calendario','🗓️',0)}
         ${sItem('pendientes','Quién tiene qué','👥',pending)}
+        ${isOwner()?sItem('pacientes','Agenda pacientes','🩺',pacPendientesTotal()):''}
         ${sItem('tareas','Tareas','✅',0)}
         ${sItem('archivos','Archivos','📁',0)}
       </div>
@@ -449,7 +452,7 @@ function notifPanel(){
   return `<div class="absolute right-0 mt-2 w-72 max-h-[70vh] overflow-auto fh-card rounded-2xl z-50 py-1" style="box-shadow:0 12px 40px rgba(0,0,0,.5)"><div class="flex items-center justify-between px-3 py-2 border-b border-[#283449]"><span class="text-sm font-headline font-bold">Notificaciones</span><button data-act="notif-toggle" class="text-[#64748b] hover:text-[#F8FAFC]">✕</button></div>${body}</div>`;
 }
 function topbar() {
-  const label = { overview:'Panel general', plan:'Plan semanal', reuniones:'Reuniones', avances:'Avances', calendario:'Calendario', pendientes:'Quién tiene qué', tareas:'Tareas', archivos:'Archivos' }[state.section];
+  const label = { overview:'Panel general', plan:'Plan semanal', reuniones:'Reuniones', avances:'Avances', calendario:'Calendario', pendientes:'Quién tiene qué', pacientes:'Agenda pacientes', tareas:'Tareas', archivos:'Archivos' }[state.section];
   const p = state.selectedProject ? proj(state.selectedProject) : null;
   const title = p ? p.name : label;
   const nCount = myNotifs().count;
@@ -512,6 +515,7 @@ function mainContent() {
   if (state.section==='calendario') return `<div class="fh-card rounded-2xl p-5 fh-rise">${calendar()}</div>`;
   if (state.section==='plan') return planView();
   if (state.section==='pendientes') return pendientes();
+  if (state.section==='pacientes') return isOwner() ? pacientesView() : '';
   if (state.section==='tareas') return `<div class="fh-card rounded-2xl p-5 fh-rise">${tareas()}</div>`;
   if (state.section==='archivos') return `<div class="fh-card rounded-2xl p-5 fh-rise">${archivos()}</div>`;
   return '';
@@ -1260,6 +1264,115 @@ function planView(){
   </div>`;
 }
 
+/* ══ Agenda de pacientes ══
+   Datos de salud: tabla ws_pacientes cerrada por RLS al dueño. No se comparte con
+   proyectos, Alexa, el feed .ics ni el asistente; aquí solo se lee y escribe. */
+const pacPend = (p) => (p.pruebas||[]).filter(t => !t.hecha);
+function pacPendientesTotal(){ return state.pacientes.filter(p=>!p.archivado).reduce((n,p)=>n+pacPend(p).length,0); }
+const pacById = (id) => state.pacientes.find(p => p.id === id);
+async function pacGuardar(p, patch){
+  const upd = { ...patch, updated_at: new Date().toISOString() };
+  Object.assign(p, upd); renderPreserve();
+  const { error } = await sb.from('ws_pacientes').update(upd).eq('id', p.id);
+  if (error) { alert('No se pudo guardar: ' + error.message); await refreshData(); }
+}
+async function pacAnadir(){
+  const g = (id) => document.getElementById(id);
+  const nombre = ((g('pac-nombre')||{}).value||'').trim(); if (!nombre) { toast('Escribe un nombre o iniciales'); return; }
+  const ident = ((g('pac-ident')||{}).value||'').trim();
+  const prueba = ((g('pac-prueba0')||{}).value||'').trim();
+  const revisar = ((g('pac-revisar0')||{}).value||'') || null;
+  const row = { id:'pac-'+uid(), nombre, ident, notas:'', revisar_el:revisar, archivado:false,
+    pruebas: prueba ? [{ id:'pr-'+uid(), texto:prueba, fecha:null, hecha:false }] : [] };
+  const { error } = await sb.from('ws_pacientes').insert(row);
+  if (error) { alert('No se pudo guardar: ' + error.message); return; }
+  state.pacientes.push({ ...row, created_at:new Date().toISOString() }); state.pacFiltro='pendientes'; render();
+  const n = document.getElementById('pac-nombre'); if (n) n.focus();
+  toast('🩺 Paciente añadido');
+}
+async function pacPruebaAnadir(id){
+  const p = pacById(id); if (!p) return;
+  const t = document.getElementById('pac-t-'+id), f = document.getElementById('pac-f-'+id);
+  const texto = (t&&t.value||'').trim(); if (!texto) return;
+  await pacGuardar(p, { pruebas: (p.pruebas||[]).concat([{ id:'pr-'+uid(), texto, fecha:(f&&f.value)||null, hecha:false }]) });
+  const t2 = document.getElementById('pac-t-'+id); if (t2) { t2.value=''; t2.focus(); }
+}
+async function pacPruebaToggle(id, tid){ const p=pacById(id); if(!p) return; await pacGuardar(p, { pruebas:(p.pruebas||[]).map(t=>t.id===tid?{...t, hecha:!t.hecha}:t) }); }
+async function pacPruebaBorrar(id, tid){ const p=pacById(id); if(!p) return; await pacGuardar(p, { pruebas:(p.pruebas||[]).filter(t=>t.id!==tid) }); }
+async function pacBorrar(id){
+  const p = pacById(id); if (!p) return;
+  if (!window.confirm('¿Eliminar a «'+p.nombre+'» y sus pruebas? No se puede deshacer.')) return;
+  const { error } = await sb.from('ws_pacientes').delete().eq('id', id);
+  if (error) { alert('No se pudo eliminar: ' + error.message); return; }
+  state.pacientes = state.pacientes.filter(x=>x.id!==id); render(); toast('Eliminado');
+}
+function pacientesView(){
+  const q = noAcc(state.pacBuscar||'').trim();
+  let ps = state.pacientes.slice();
+  if (state.pacFiltro==='pendientes') ps = ps.filter(p=>!p.archivado && pacPend(p).length);
+  else if (state.pacFiltro==='todos') ps = ps.filter(p=>!p.archivado);
+  else ps = ps.filter(p=>p.archivado);
+  if (q) ps = ps.filter(p => noAcc(p.nombre+' '+(p.ident||'')+' '+(p.pruebas||[]).map(t=>t.texto).join(' ')).includes(q));
+  const clave = (p) => (p.revisar_el || '9999') + String(p.created_at||'');
+  ps.sort((a,b)=>clave(a).localeCompare(clave(b)));
+  const nPend = state.pacientes.filter(p=>!p.archivado && pacPend(p).length).length;
+  const chip = (id,lab,n) => `<button data-act="pac-filtro" data-id="${id}" class="px-3 py-1.5 rounded-full text-xs font-semibold ${state.pacFiltro===id?'bg-[#8083ff]/20 text-[#c0c1ff] border border-[#8083ff]/40':'text-[#94A3B8] border border-[#283449] hover:text-[#F8FAFC]'}">${lab}${n!=null?` <span class="opacity-70">${n}</span>`:''}</button>`;
+  const inp = 'bg-[#0d1528] border border-[#283449] rounded-lg text-sm px-3 py-2 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]';
+  const tarjeta = (p) => {
+    const pend = pacPend(p), hechas = (p.pruebas||[]).filter(t=>t.hecha);
+    const rb = dateBadge(p.revisar_el);
+    const fila = (t) => { const db = dateBadge(t.fecha); return `<div class="flex items-center gap-2 py-1.5 ${t.hecha?'opacity-50':''}">
+        <button data-act="pac-t-toggle" data-id="${esc(p.id)}" data-t="${esc(t.id)}" title="${t.hecha?'Marcar pendiente':'Marcar hecha'}" class="w-4 h-4 rounded border flex items-center justify-center shrink-0 ${t.hecha?'bg-[#4edea3] border-[#4edea3]':'border-[#334155] hover:border-[#4edea3]'}">${t.hecha?'<span class="text-[#0b1326] text-[9px]">✓</span>':''}</button>
+        <span class="text-sm flex-1 min-w-0 ${t.hecha?'line-through text-[#64748b]':''}">${esc(t.texto)}</span>
+        ${db?`<span class="text-[9px] px-1.5 py-0.5 rounded-full ${db[1]} shrink-0">📅 ${esc(db[0])}</span>`:''}
+        <button data-act="pac-t-del" data-id="${esc(p.id)}" data-t="${esc(t.id)}" title="Quitar prueba" class="text-[#64748b] hover:text-[#EF4444] text-xs shrink-0">🗑</button>
+      </div>`; };
+    return `<div class="fh-card rounded-2xl p-4">
+      <div class="flex items-start gap-3 mb-2">
+        <div class="w-9 h-9 rounded-full bg-[#4edea3]/15 text-[#4edea3] flex items-center justify-center text-sm font-bold shrink-0">${esc((p.nombre||'?').trim().charAt(0).toUpperCase())}</div>
+        <div class="flex-1 min-w-0">
+          <p class="font-headline font-bold text-sm">${esc(p.nombre)}</p>
+          <div class="flex items-center gap-1.5 flex-wrap mt-0.5">
+            ${p.ident?`<span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#131b2e] border border-[#283449] text-[#94A3B8]">${esc(p.ident)}</span>`:''}
+            <span class="text-[9px] px-1.5 py-0.5 rounded-full ${pend.length?'bg-[#F59E0B]/20 text-[#F59E0B]':'bg-[#4edea3]/15 text-[#4edea3]'}">${pend.length?pend.length+' pendiente(s)':'todo hecho'}</span>
+            ${rb?`<span class="text-[9px] px-1.5 py-0.5 rounded-full ${rb[1]}">revisar ${esc(rb[0])}</span>`:''}
+          </div>
+        </div>
+        <label class="text-[10px] text-[#64748b] flex items-center gap-1 shrink-0">Revisar <input type="date" data-act="pac-revisar" data-id="${esc(p.id)}" value="${esc(p.revisar_el||'')}" class="bg-[#0d1528] border border-[#283449] rounded-md px-1.5 py-1 text-[11px] text-[#F8FAFC]" /></label>
+      </div>
+      <div class="divide-y divide-[#283449]/50">${pend.map(fila).join('')}${hechas.map(fila).join('')}${(p.pruebas||[]).length?'':'<p class="text-[11px] text-[#64748b] py-1.5">Sin pruebas apuntadas</p>'}</div>
+      <div class="flex items-center gap-1.5 mt-2">
+        <input id="pac-t-${esc(p.id)}" data-id="${esc(p.id)}" placeholder="＋ Prueba pendiente (analítica, eco, TAC, interconsulta…)" autocomplete="off" class="flex-1 min-w-0 ${inp} text-[12px] py-1.5" />
+        <input id="pac-f-${esc(p.id)}" type="date" title="Fecha prevista (opcional)" class="bg-[#0d1528] border border-[#283449] rounded-lg text-[11px] px-1.5 py-1.5 text-[#94A3B8] shrink-0" />
+        <button data-act="pac-t-add" data-id="${esc(p.id)}" class="shrink-0 w-8 h-8 rounded-lg bg-[#8083ff]/20 text-[#c0c1ff] hover:bg-[#8083ff] hover:text-white">＋</button>
+      </div>
+      <textarea data-act="pac-notas" data-id="${esc(p.id)}" rows="1" placeholder="Notas (se guardan al salir del campo)" class="w-full mt-2 ${inp} text-[12px] py-1.5" style="resize:vertical">${esc(p.notas||'')}</textarea>
+      <div class="flex items-center justify-end gap-3 mt-2 text-[11px]">
+        <button data-act="pac-archivar" data-id="${esc(p.id)}" class="text-[#94A3B8] hover:text-[#F8FAFC]">${p.archivado?'↩ Recuperar':'📦 Archivar'}</button>
+        <button data-act="pac-del" data-id="${esc(p.id)}" class="text-[#64748b] hover:text-[#EF4444]">🗑 Eliminar</button>
+      </div>
+    </div>`;
+  };
+  return `<div class="space-y-4 fh-rise">
+    <div class="fh-card rounded-2xl p-4 border-[#4edea3]/30">
+      <div class="flex items-center gap-2 mb-1 flex-wrap"><span>🩺</span><h3 class="font-headline font-bold">Agenda de pacientes</h3><span class="text-[10px] px-2 py-0.5 rounded-full bg-[#4edea3]/15 text-[#4edea3]">🔒 solo tú</span></div>
+      <p class="text-[11px] text-[#94A3B8] mb-3">Nadie más del Workspace puede ver esta sección (está cerrada en la base de datos). Para minimizar datos, mejor iniciales o nº de historia que el nombre completo.</p>
+      <div class="flex items-center gap-2 flex-wrap">
+        <input id="pac-nombre" placeholder="Nombre o iniciales" autocomplete="off" class="flex-1 min-w-[150px] ${inp}" />
+        <input id="pac-ident" placeholder="Nº historia / ID (opcional)" autocomplete="off" class="w-44 ${inp}" />
+        <input id="pac-prueba0" placeholder="Primera prueba pendiente (opcional)" autocomplete="off" class="flex-1 min-w-[180px] ${inp}" />
+        <label class="text-[10px] text-[#64748b] flex items-center gap-1">Revisar <input id="pac-revisar0" type="date" class="${inp} py-1.5 text-[12px]" /></label>
+        <button data-act="pac-add" class="px-4 py-2 rounded-lg bg-[#4edea3] text-[#0b1326] text-sm font-semibold">Añadir</button>
+      </div>
+    </div>
+    <div class="flex items-center gap-2 flex-wrap">
+      ${chip('pendientes','Con pruebas pendientes',nPend)}${chip('todos','Todos',state.pacientes.filter(p=>!p.archivado).length)}${chip('archivados','Archivados',state.pacientes.filter(p=>p.archivado).length)}
+      <input id="pac-buscar" value="${esc(state.pacBuscar||'')}" placeholder="🔎 Buscar paciente o prueba" autocomplete="off" class="ml-auto w-56 ${inp} py-1.5 text-[12px]" />
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">${ps.map(tarjeta).join('') || `<p class="text-sm text-[#64748b] text-center py-10 lg:col-span-2">${state.pacientes.length?'Nada con este filtro':'Aún no hay pacientes. Añade el primero arriba.'}</p>`}</div>
+  </div>`;
+}
+
 /* «Quién tiene qué»: por cada proyecto, las tareas pendientes de Carlos, de Raquel y sin asignar. */
 function pendientes(){
   const projs = state.projects.slice().sort((a,b)=>projTasks(b.id).filter(t=>!t.completed).length - projTasks(a.id).filter(t=>!t.completed).length);
@@ -1396,6 +1509,13 @@ async function manejarClick(a, id, el, e){
   if (a==='cal-who'){ state.calWho=id; render(); return; }
   if (a==='update-app'){ await updateApp(); return; }
   if (a==='sched-save'){ await saveSchedule(el.dataset.email, el.dataset.idx); return; }
+  if (a==='pac-add'){ await pacAnadir(); return; }
+  if (a==='pac-filtro'){ state.pacFiltro=id; render(); return; }
+  if (a==='pac-t-add'){ await pacPruebaAnadir(id); return; }
+  if (a==='pac-t-toggle'){ await pacPruebaToggle(id, el.dataset.t); return; }
+  if (a==='pac-t-del'){ await pacPruebaBorrar(id, el.dataset.t); return; }
+  if (a==='pac-archivar'){ const p=pacById(id); if(p) await pacGuardar(p,{ archivado:!p.archivado }); return; }
+  if (a==='pac-del'){ await pacBorrar(id); return; }
   if (a==='tdone'){ state.taskDone=id; render(); return; }
   if (a==='stage'){ await setStage(id, el.dataset.stage); return; }
   if (a==='add-mtg'){ await addMeeting(id); return; }
@@ -1408,8 +1528,11 @@ document.addEventListener('change', async (e) => {
   if (el.dataset.act==='proj-progress') await updateProject(el.dataset.id,{progress:Number(el.value)});
   if (el.dataset.act==='proj-status') await updateProject(el.dataset.id,{status:el.value});
   if (el.dataset.act==='share-toggle') await toggleMember(el.dataset.id, el.dataset.email, el.checked);
+  if (el.dataset.act==='pac-revisar') { const p=pacById(el.dataset.id); if(p) await pacGuardar(p,{ revisar_el: el.value||null }); }
+  if (el.dataset.act==='pac-notas') { const p=pacById(el.dataset.id); if(p && el.value!==(p.notas||'')) await pacGuardar(p,{ notas: el.value }); }
 });
 document.addEventListener('input', (e) => {
+  if (e.target.id==='pac-buscar') { state.pacBuscar=e.target.value; renderPreserve(); return; }
   if (e.target.id==='assist-input') { const pv=document.getElementById('assist-preview'); if(pv){ try{ pv.textContent = e.target.value.trim() ? assistSummary(parseAssist(e.target.value)) : ''; }catch(_){ pv.textContent=''; } } return; }
   const el=e.target.closest('[data-act="proj-progress"]'); if(!el) return;
   const lbl=document.getElementById('prog-label'); if(lbl) lbl.textContent=el.value+'%';
@@ -1425,6 +1548,8 @@ document.addEventListener('keydown', (e) => {
   if (e.target.id && e.target.id.startsWith('goal-input-p-')) { e.preventDefault(); addGoalFor(e.target.dataset.email); }
   if (e.target.id && e.target.id.startsWith('task-input-p-')) { e.preventDefault(); addTaskFor(e.target.dataset.email); }
   if (e.target.id==='goal-input-month') { e.preventDefault(); addGoal('month'); }
+  if (['pac-nombre','pac-ident','pac-prueba0'].includes(e.target.id)) { e.preventDefault(); pacAnadir(); }
+  if (e.target.id && e.target.id.startsWith('pac-t-')) { e.preventDefault(); pacPruebaAnadir(e.target.dataset.id); }
 });
 
 /* ── boot ── */
