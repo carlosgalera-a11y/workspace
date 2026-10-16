@@ -6,7 +6,11 @@
 <title>Workspace · FileHub</title>
 <meta name="description" content="Proyectos y avances — EGS / FileHub" />
 <link rel="manifest" href="manifest.json" />
-<meta name="theme-color" content="#0b1326" />
+<meta name="theme-color" content="#0b1326" id="meta-theme" />
+<script>
+  // Tema guardado en este navegador: 'oscuro' (por defecto) o 'claro'. Se aplica antes de pintar.
+  (function(){ try { if (localStorage.getItem('ws_tema') === 'claro') document.documentElement.classList.add('claro'); } catch(_){} })();
+</script>
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Workspace" />
@@ -24,6 +28,43 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0/dist/umd/supabase.min.js"></script>
 <style>
   :root { color-scheme: dark; }
+  /* ── Legibilidad (los dos temas): textos diminutos un poco más grandes ── */
+  html .text-\[9px\] { font-size: 10px; }
+  html .text-\[10px\] { font-size: 11px; }
+  /* ── Modo noche con más contraste ── */
+  html:not(.claro) .text-\[\#64748b\] { color: #8a99b2; }
+  html:not(.claro) .text-\[\#94A3B8\] { color: #b2bfd2; }
+  html:not(.claro) .border-\[\#283449\] { border-color: #33415c; }
+  html:not(.claro) .fh-card { background: #141d33; border-color: #33415c; }
+  html:not(.claro) .placeholder\:text-\[\#64748b\]::placeholder { color: #7d8ba3; }
+
+  /* ── Modo día (claro) ── */
+  html.claro { color-scheme: light; }
+  html.claro, html.claro body { background: #eef2f7; color: #0f172a; }
+  html.claro .fh-card { background: #ffffff; border-color: #dbe2ec; box-shadow: 0 1px 2px rgba(15,23,42,.05); }
+  html.claro ::-webkit-scrollbar-thumb { background: #c5ccd8; }
+  html.claro .bg-\[\#0b1326\] { background-color: #eef2f7; }
+  html.claro .bg-\[\#0b1326\]\/85 { background-color: rgba(255,255,255,.88); }
+  html.claro .bg-\[\#0d1528\] { background-color: #ffffff; }
+  html.claro .bg-\[\#131b2e\] { background-color: #ffffff; }
+  html.claro .bg-\[\#1c2436\], html.claro .hover\:bg-\[\#1c2436\]:hover { background-color: #eef1f6; }
+  html.claro .bg-\[\#283449\] { background-color: #dfe4ec; }
+  html.claro .text-\[\#F8FAFC\], html.claro .hover\:text-\[\#F8FAFC\]:hover { color: #0f172a; }
+  html.claro .text-\[\#94A3B8\] { color: #475569; }
+  html.claro .text-\[\#64748b\] { color: #5b6577; }
+  html.claro .placeholder\:text-\[\#64748b\]::placeholder { color: #8a94a6; }
+  html.claro .text-\[\#c0c1ff\] { color: #4f46e5; }
+  html.claro .text-\[\#4edea3\] { color: #047857; }
+  html.claro .text-\[\#e9d5ff\] { color: #6d28d9; }
+  html.claro .text-\[\#fecdd3\] { color: #be123c; }
+  html.claro .text-\[\#fca5a5\] { color: #b91c1c; }
+  html.claro .text-\[\#F59E0B\] { color: #b45309; }
+  html.claro .text-\[\#fcd34d\] { color: #a16207; }
+  html.claro .border-\[\#283449\], html.claro .border-\[\#283449\]\/50, html.claro .border-\[\#283449\]\/60 { border-color: #dbe2ec; }
+  html.claro .border-\[\#334155\] { border-color: #c5ccd8; }
+  html.claro .divide-\[\#283449\]\/50 > :not([hidden]) ~ :not([hidden]),
+  html.claro .divide-\[\#283449\]\/60 > :not([hidden]) ~ :not([hidden]) { border-color: #e3e8ef; }
+
   html,body { margin:0; background:#0b1326; color:#F8FAFC; font-family:Inter,system-ui,sans-serif; -webkit-font-smoothing:antialiased; }
   .font-headline { font-family:'Hanken Grotesk',Inter,sans-serif; }
   .fh-card { background:#131b2e; border:1px solid #283449; }
@@ -51,7 +92,7 @@
 const SUPA_URL = 'https://igvadjgjpyuvzailjqwg.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlndmFkamdqcHl1dnphaWxqcXdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NDI3MTAsImV4cCI6MjA4ODAxODcxMH0.eAqKCHDzrkvMTseaBP0I_JICP1owX60-cp3agYqRz4Q';
 const DEFAULT_REPO = 'carlosgalera-a11y/filehub2026';
-const APP_VERSION = 25; // mantener igual que CACHE en sw.js (workspace-vNN)
+const APP_VERSION = 26; // mantener igual que CACHE en sw.js (workspace-vNN)
 // URL propia (dinámica): funciona en github.io/workspace/ Y en el dominio propio.
 const APP_URL = (typeof location !== 'undefined' && location.origin) ? (location.origin + location.pathname) : 'https://filehubworksplace.com/';
 const CAL_URL = 'https://carlosgalera-a11y.github.io/calendario.html';
@@ -84,7 +125,7 @@ const fmtDay = (d) => d.toLocaleDateString('es-ES',{weekday:'short',day:'numeric
 const state = {
   user: null, projects: [], tasks: [], events: [], files: [], updates: [], members: [], goals: [], avail: [],
   week: mondayOf(new Date()), calWho: 'todos', calView: 'mes', calDay: null, updateAvail: false, schedule: [],
-  upStart: null, upRange: '14d', pacientes: [], pacFiltro: 'pendientes', pacBuscar: '',
+  upStart: null, upRange: '14d', pacientes: [], pacFiltro: 'pendientes', pacBuscar: '', dudas: [], pacTab: 'pacientes', dudaFiltro: 'abiertas',
   section: 'overview', selectedProject: null,
   gh: null, ghLoading: false, ghTab: 'commits',
   cal: { m: new Date().getMonth(), y: new Date().getFullYear() },
@@ -150,7 +191,7 @@ const taskStage = (t) => t.completed ? 'hecho' : (t.stage==='en_curso' ? 'en_cur
 /* ── data (tablas COMPARTIDAS ws_*: RLS de pareja Carlos+Raquel → los dos veis y editáis lo mismo) ── */
 const me = () => (state.user && state.user.email) || '';
 async function loadAll() {
-  const [pr,tk,mt,fi,up,mb,gl,av,sc,pa] = await Promise.all([
+  const [pr,tk,mt,fi,up,mb,gl,av,sc,pa,du] = await Promise.all([
     sb.from('ws_projects').select('*').order('created_at',{ascending:true}),
     sb.from('ws_tasks').select('*').order('created_at',{ascending:false}).limit(500),
     sb.from('ws_meetings').select('*').limit(500),
@@ -161,8 +202,10 @@ async function loadAll() {
     sb.from('ws_availability').select('*'),
     sb.from('ws_schedule').select('*'),
     isOwner() ? sb.from('ws_pacientes').select('*').order('created_at',{ascending:true}) : Promise.resolve({ data: [] }),
+    isOwner() ? sb.from('ws_dudas').select('*').order('created_at',{ascending:false}) : Promise.resolve({ data: [] }),
   ]);
   state.pacientes = pa.data || [];
+  state.dudas = du.data || [];
   state.goals = gl.data || [];
   state.avail = av.data || [];
   state.schedule = sc.data || [];
@@ -328,6 +371,14 @@ async function checkUpdate(){
     if (m && +m[1] !== APP_VERSION) { state.updateAvail = +m[1]; if (state.user) renderPreserve(); }
   } catch(_){}
 }
+const temaClaro = () => document.documentElement.classList.contains('claro');
+function cambiarTema(){
+  const claro = !temaClaro();
+  document.documentElement.classList.toggle('claro', claro);
+  try { localStorage.setItem('ws_tema', claro ? 'claro' : 'oscuro'); } catch(_){}
+  const m = document.getElementById('meta-theme'); if (m) m.setAttribute('content', claro ? '#eef2f7' : '#0b1326');
+  render();
+}
 function toast(msg){ const t=document.createElement('div'); t.textContent=msg; t.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#8083ff;color:#fff;padding:10px 18px;border-radius:12px;z-index:999;font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,.4)'; document.body.appendChild(t); setTimeout(()=>t.remove(),1800); }
 
 /* ══ render ══ */
@@ -371,7 +422,7 @@ async function subscribeRealtime(){
     // deje pasar los cambios (si no, Realtime iría como anon y no llegaría nada).
     try { const { data:{ session } } = await sb.auth.getSession(); if(session&&session.access_token&&sb.realtime&&sb.realtime.setAuth) sb.realtime.setAuth(session.access_token); } catch(_){}
     let ch = sb.channel('ws-live');
-    ['ws_projects','ws_tasks','ws_meetings','ws_updates','ws_files','ws_project_members','ws_goals','ws_availability','ws_schedule'].concat(isOwner()?['ws_pacientes']:[]).forEach(t=>{
+    ['ws_projects','ws_tasks','ws_meetings','ws_updates','ws_files','ws_project_members','ws_goals','ws_availability','ws_schedule'].concat(isOwner()?['ws_pacientes','ws_dudas']:[]).forEach(t=>{
       ch = ch.on('postgres_changes', { event:'*', schema:'public', table:t }, onLiveChange);
     });
     ch.subscribe((status)=>{ const was=state._live; state._live = (status==='SUBSCRIBED'); if(state.user && was!==state._live) renderPreserve(); });
@@ -414,7 +465,7 @@ function sidebar() {
         ${sItem('reuniones','Reuniones','📅',0)}
         ${sItem('calendario','Calendario','🗓️',0)}
         ${sItem('pendientes','Quién tiene qué','👥',pending)}
-        ${isOwner()?sItem('pacientes','Agenda pacientes','🩺',pacPendientesTotal()):''}
+        ${isOwner()?sItem('pacientes','Agenda pacientes','🩺',pacPendientesTotal()+state.dudas.filter(d=>!d.resuelta).length):''}
         ${sItem('tareas','Tareas','✅',0)}
         ${sItem('archivos','Archivos','📁',0)}
       </div>
@@ -465,6 +516,7 @@ function topbar() {
     <div class="ml-auto flex items-center gap-2 shrink-0">
       ${p&&p.notebook_url?`<a href="${esc(p.notebook_url)}" target="_blank" rel="noopener" class="hidden sm:inline text-[11px] px-3 py-1.5 rounded-lg bg-[#4edea3]/15 text-[#4edea3] font-semibold">Abrir web ↗</a>`:''}
       ${state._live?`<span class="hidden sm:flex items-center gap-1 text-[10px] text-[#4edea3]" title="Cambios en tiempo real"><span class="w-1.5 h-1.5 rounded-full bg-[#4edea3]"></span>en vivo</span>`:''}
+      <button data-act="tema" title="${temaClaro()?'Pasar a modo noche':'Pasar a modo día'}" class="w-9 h-9 rounded-lg bg-[#131b2e] border border-[#283449] text-[#94A3B8] hover:text-[#F8FAFC] flex items-center justify-center">${temaClaro()?'🌙':'☀️'}</button>
       <button data-act="refresh" title="Actualizar" class="w-9 h-9 rounded-lg bg-[#131b2e] border border-[#283449] text-[#94A3B8] hover:text-[#F8FAFC] flex items-center justify-center ${state.refreshing?'spin':''}">⟳</button>
       <div class="relative">
         <button data-act="notif-toggle" title="Notificaciones" class="w-9 h-9 rounded-lg bg-[#131b2e] border border-[#283449] text-[#94A3B8] hover:text-[#F8FAFC] flex items-center justify-center relative">🔔${nCount?`<span class="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-[#EF4444] text-white text-[9px] font-bold flex items-center justify-center">${nCount>9?'9+':nCount}</span>`:''}</button>
@@ -1306,7 +1358,68 @@ async function pacBorrar(id){
   if (error) { alert('No se pudo eliminar: ' + error.message); return; }
   state.pacientes = state.pacientes.filter(x=>x.id!==id); render(); toast('Eliminado');
 }
+async function dudaAnadir(){
+  const t = document.getElementById('duda-texto'), pa = document.getElementById('duda-pac');
+  const texto = (t&&t.value||'').trim(); if (!texto) return;
+  const row = { id:'duda-'+uid(), texto, paciente_id:(pa&&pa.value)||null, respuesta:'', resuelta:false };
+  const { error } = await sb.from('ws_dudas').insert(row);
+  if (error) { alert('No se pudo guardar la duda: ' + error.message); return; }
+  state.dudas.unshift({ ...row, created_at:new Date().toISOString() }); state.dudaFiltro='abiertas'; render();
+  const t2 = document.getElementById('duda-texto'); if (t2) t2.focus();
+}
+async function dudaGuardar(d, patch){
+  const upd = { ...patch, updated_at:new Date().toISOString() };
+  Object.assign(d, upd); renderPreserve();
+  const { error } = await sb.from('ws_dudas').update(upd).eq('id', d.id);
+  if (error) { alert('No se pudo guardar: ' + error.message); await refreshData(); }
+}
+async function dudaBorrar(id){
+  const d = state.dudas.find(x=>x.id===id); if (!d) return;
+  if (!window.confirm('¿Eliminar esta duda?')) return;
+  const { error } = await sb.from('ws_dudas').delete().eq('id', id);
+  if (error) { alert('No se pudo eliminar: ' + error.message); return; }
+  state.dudas = state.dudas.filter(x=>x.id!==id); render();
+}
+function dudasView(){
+  const inp = 'bg-[#0d1528] border border-[#283449] rounded-lg text-sm px-3 py-2 placeholder:text-[#64748b] focus:outline-none focus:border-[#8083ff]';
+  const abiertas = state.dudas.filter(d=>!d.resuelta), resueltas = state.dudas.filter(d=>d.resuelta);
+  const lista = state.dudaFiltro==='resueltas' ? resueltas : state.dudaFiltro==='todas' ? state.dudas : abiertas;
+  const pacOpts = ['<option value="">Sin paciente</option>'].concat(state.pacientes.filter(p=>!p.archivado).map(p=>`<option value="${esc(p.id)}">${esc(p.nombre)}</option>`)).join('');
+  const chip = (id,lab,n) => `<button data-act="duda-filtro" data-id="${id}" class="px-3 py-1.5 rounded-full text-xs font-semibold ${state.dudaFiltro===id?'bg-[#8083ff]/20 text-[#c0c1ff] border border-[#8083ff]/40':'text-[#94A3B8] border border-[#283449] hover:text-[#F8FAFC]'}">${lab} <span class="opacity-70">${n}</span></button>`;
+  const fila = (d) => { const p = d.paciente_id ? pacById(d.paciente_id) : null;
+    return `<div class="fh-card rounded-2xl p-4 ${d.resuelta?'opacity-70':''}">
+      <div class="flex items-start gap-3">
+        <button data-act="duda-toggle" data-id="${esc(d.id)}" title="${d.resuelta?'Reabrir':'Marcar resuelta'}" class="mt-0.5 w-5 h-5 rounded-md border flex items-center justify-center shrink-0 ${d.resuelta?'bg-[#4edea3] border-[#4edea3]':'border-[#334155] hover:border-[#4edea3]'}">${d.resuelta?'<span class="text-[#0b1326] text-xs">✓</span>':''}</button>
+        <div class="flex-1 min-w-0">
+          <p class="text-sm ${d.resuelta?'line-through text-[#64748b]':'text-[#F8FAFC]'} whitespace-pre-wrap break-words">❓ ${esc(d.texto)}</p>
+          <div class="flex items-center gap-1.5 flex-wrap mt-1">
+            ${p?`<span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#4edea3]/15 text-[#4edea3]">🩺 ${esc(p.nombre)}</span>`:''}
+            <span class="text-[9px] text-[#64748b]">${esc(relTime(d.created_at))}</span>
+          </div>
+          <textarea data-act="duda-resp" data-id="${esc(d.id)}" rows="2" placeholder="Respuesta o qué hacer (se guarda al salir del campo)" class="w-full mt-2 ${inp} text-[12px] py-1.5" style="resize:vertical">${esc(d.respuesta||'')}</textarea>
+        </div>
+        <button data-act="duda-del" data-id="${esc(d.id)}" title="Eliminar" class="text-[#64748b] hover:text-[#EF4444] text-sm shrink-0">🗑</button>
+      </div>
+    </div>`; };
+  return `<div class="space-y-4">
+    <div class="fh-card rounded-2xl p-4">
+      <p class="text-[11px] text-[#94A3B8] mb-2">Apunta dudas clínicas o pendientes de consultar (con un compañero, una guía, un especialista…). Puedes ligarlas a un paciente y anotar la respuesta cuando la tengas.</p>
+      <div class="flex items-center gap-2 flex-wrap">
+        <input id="duda-texto" placeholder="Nueva duda… (Enter)" autocomplete="off" class="flex-1 min-w-[200px] ${inp}" />
+        <select id="duda-pac" class="${inp} text-[#94A3B8]">${pacOpts}</select>
+        <button data-act="duda-add" class="px-4 py-2 rounded-lg bg-[#8083ff] text-white text-sm font-semibold hover:bg-[#6d70e6]">Añadir</button>
+      </div>
+    </div>
+    <div class="flex items-center gap-2 flex-wrap">${chip('abiertas','Abiertas',abiertas.length)}${chip('resueltas','Resueltas',resueltas.length)}${chip('todas','Todas',state.dudas.length)}</div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">${lista.map(fila).join('') || `<p class="text-sm text-[#64748b] text-center py-10 lg:col-span-2">${state.dudas.length?'Nada con este filtro':'Sin dudas apuntadas.'}</p>`}</div>
+  </div>`;
+}
 function pacientesView(){
+  const tabs = `<div class="inline-flex p-1 rounded-xl bg-[#0d1528] border border-[#283449] gap-1">${[['pacientes','🩺 Pacientes',state.pacientes.filter(p=>!p.archivado).length],['dudas','❓ Dudas',state.dudas.filter(d=>!d.resuelta).length]].map(([id,lab,n])=>`<button data-act="pac-tab" data-id="${id}" class="px-4 py-1.5 rounded-lg text-sm font-semibold ${state.pacTab===id?'bg-[#8083ff] text-white':'text-[#94A3B8] hover:text-[#F8FAFC]'}">${lab}${n?` <span class="opacity-75 text-xs">${n}</span>`:''}</button>`).join('')}</div>`;
+  if (state.pacTab==='dudas') return `<div class="space-y-4 fh-rise">${tabs}${dudasView()}</div>`;
+  return `<div class="space-y-4 fh-rise">${tabs}${pacientesLista()}</div>`;
+}
+function pacientesLista(){
   const q = noAcc(state.pacBuscar||'').trim();
   let ps = state.pacientes.slice();
   if (state.pacFiltro==='pendientes') ps = ps.filter(p=>!p.archivado && pacPend(p).length);
@@ -1336,6 +1449,7 @@ function pacientesView(){
             ${p.ident?`<span class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#131b2e] border border-[#283449] text-[#94A3B8]">${esc(p.ident)}</span>`:''}
             <span class="text-[9px] px-1.5 py-0.5 rounded-full ${pend.length?'bg-[#F59E0B]/20 text-[#F59E0B]':'bg-[#4edea3]/15 text-[#4edea3]'}">${pend.length?pend.length+' pendiente(s)':'todo hecho'}</span>
             ${rb?`<span class="text-[9px] px-1.5 py-0.5 rounded-full ${rb[1]}">revisar ${esc(rb[0])}</span>`:''}
+            ${(()=>{ const n=state.dudas.filter(d=>d.paciente_id===p.id&&!d.resuelta).length; return n?`<button data-act="pac-tab" data-id="dudas" class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#8083ff]/15 text-[#c0c1ff]">❓ ${n} duda(s)</button>`:''; })()}
           </div>
         </div>
         <label class="text-[10px] text-[#64748b] flex items-center gap-1 shrink-0">Revisar <input type="date" data-act="pac-revisar" data-id="${esc(p.id)}" value="${esc(p.revisar_el||'')}" class="bg-[#0d1528] border border-[#283449] rounded-md px-1.5 py-1 text-[11px] text-[#F8FAFC]" /></label>
@@ -1353,7 +1467,7 @@ function pacientesView(){
       </div>
     </div>`;
   };
-  return `<div class="space-y-4 fh-rise">
+  return `<div class="space-y-4">
     <div class="fh-card rounded-2xl p-4 border-[#4edea3]/30">
       <div class="flex items-center gap-2 mb-1 flex-wrap"><span>🩺</span><h3 class="font-headline font-bold">Agenda de pacientes</h3><span class="text-[10px] px-2 py-0.5 rounded-full bg-[#4edea3]/15 text-[#4edea3]">🔒 solo tú</span></div>
       <p class="text-[11px] text-[#94A3B8] mb-3">Nadie más del Workspace puede ver esta sección (está cerrada en la base de datos). Para minimizar datos, mejor iniciales o nº de historia que el nombre completo.</p>
@@ -1510,6 +1624,12 @@ async function manejarClick(a, id, el, e){
   if (a==='update-app'){ await updateApp(); return; }
   if (a==='sched-save'){ await saveSchedule(el.dataset.email, el.dataset.idx); return; }
   if (a==='pac-add'){ await pacAnadir(); return; }
+  if (a==='tema'){ cambiarTema(); return; }
+  if (a==='pac-tab'){ state.pacTab=id; render(); return; }
+  if (a==='duda-add'){ await dudaAnadir(); return; }
+  if (a==='duda-filtro'){ state.dudaFiltro=id; render(); return; }
+  if (a==='duda-toggle'){ const d=state.dudas.find(x=>x.id===id); if(d) await dudaGuardar(d,{ resuelta:!d.resuelta }); return; }
+  if (a==='duda-del'){ await dudaBorrar(id); return; }
   if (a==='pac-filtro'){ state.pacFiltro=id; render(); return; }
   if (a==='pac-t-add'){ await pacPruebaAnadir(id); return; }
   if (a==='pac-t-toggle'){ await pacPruebaToggle(id, el.dataset.t); return; }
@@ -1529,6 +1649,7 @@ document.addEventListener('change', async (e) => {
   if (el.dataset.act==='proj-status') await updateProject(el.dataset.id,{status:el.value});
   if (el.dataset.act==='share-toggle') await toggleMember(el.dataset.id, el.dataset.email, el.checked);
   if (el.dataset.act==='pac-revisar') { const p=pacById(el.dataset.id); if(p) await pacGuardar(p,{ revisar_el: el.value||null }); }
+  if (el.dataset.act==='duda-resp') { const d=state.dudas.find(x=>x.id===el.dataset.id); if(d && el.value!==(d.respuesta||'')) await dudaGuardar(d,{ respuesta: el.value }); }
   if (el.dataset.act==='pac-notas') { const p=pacById(el.dataset.id); if(p && el.value!==(p.notas||'')) await pacGuardar(p,{ notas: el.value }); }
 });
 document.addEventListener('input', (e) => {
@@ -1549,6 +1670,7 @@ document.addEventListener('keydown', (e) => {
   if (e.target.id && e.target.id.startsWith('task-input-p-')) { e.preventDefault(); addTaskFor(e.target.dataset.email); }
   if (e.target.id==='goal-input-month') { e.preventDefault(); addGoal('month'); }
   if (['pac-nombre','pac-ident','pac-prueba0'].includes(e.target.id)) { e.preventDefault(); pacAnadir(); }
+  if (e.target.id==='duda-texto') { e.preventDefault(); dudaAnadir(); }
   if (e.target.id && e.target.id.startsWith('pac-t-')) { e.preventDefault(); pacPruebaAnadir(e.target.dataset.id); }
 });
 
