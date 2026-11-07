@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gastos del piso</title>
+<style>
+  body { margin: 0; padding: 24px; background: #0b1326; color: #94A3B8; font: 14px system-ui, sans-serif; }
+  a { color: #c0c1ff; }
+</style>
+</head>
+<body>
+<p id="aviso">Cargando los gastos…</p>
+<script>
+/* Carga la app de Gastos DENTRO de este origen, para que comparta la sesión de Supabase del Workspace y salga
+ * siempre la última versión sin copiar el fichero. GitHub Pages sirve con Access-Control-Allow-Origin: *.
+ * Se oculta su botón «Salir»: la sesión es la misma y cerraría también el Workspace. */
+(async () => {
+  const APP = 'https://carlosgalera-a11y.github.io/gastos/';
+  try {
+    const r = await fetch(APP, { cache: 'no-cache' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const html = (await r.text()).replace(/<head([^>]*)>/i, `<head$1><base href="${APP}"><style>#salir{display:none!important}</style>`);
+    document.open(); document.write(html); document.close();
+  } catch (e) {
+    document.getElementById('aviso').innerHTML = 'No se han podido cargar los gastos. <a href="' + APP + '" target="_top">Ábrelos aquí</a>.';
+  }
+})();
+</script>
+</body>
+</html>
