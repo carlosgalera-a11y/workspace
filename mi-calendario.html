@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mi calendario</title>
+<style>
+  body { margin: 0; padding: 24px; background: #0b1326; color: #94A3B8; font: 14px system-ui, sans-serif; }
+  a { color: #c0c1ff; }
+</style>
+</head>
+<body>
+<p id="aviso">Cargando el calendario…</p>
+<script>
+/* Carga calendario.html de FileHub DENTRO de este origen, para que comparta la sesión de Supabase del
+ * Workspace (misma clave en localStorage) y salga siempre la última versión sin copiar el fichero.
+ * GitHub Pages sirve con Access-Control-Allow-Origin: *, por eso el fetch funciona desde aquí. */
+(async () => {
+  const ORIGEN = 'https://arditifilehub.com';
+  try {
+    const r = await fetch(ORIGEN + '/calendario.html', { cache: 'no-cache' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const html = (await r.text()).replace(/<head([^>]*)>/i, `<head$1><base href="${ORIGEN}/" target="_top">`);
+    document.open(); document.write(html); document.close();
+  } catch (e) {
+    document.getElementById('aviso').innerHTML =
+      'No se ha podido cargar el calendario. <a href="' + ORIGEN + '/calendario.html" target="_top">Ábrelo aquí</a>.';
+  }
+})();
+</script>
+</body>
+</html>
