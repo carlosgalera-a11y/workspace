@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Casa</title>
+<style>
+  body { margin: 0; padding: 24px; background: #0b1326; color: #94A3B8; font: 14px system-ui, sans-serif; }
+  a { color: #c0c1ff; }
+</style>
+</head>
+<body>
+<p id="aviso">Cargando el panel de casa…</p>
+<script>
+/* Carga el panel de casa DENTRO de este origen, para que comparta la sesión de Supabase del Workspace y salga
+ * siempre la última versión. Con <base>, un enlace «#tareas» navegaría a la web original y se perdería la sesión:
+ * por eso se interceptan. __casaIncrustada le dice que oculte Gastos y Calendario, que aquí tienen su pestaña.
+ * Se oculta «Cerrar sesión»: la sesión es la misma y cerraría también el Workspace. */
+(async () => {
+  const APP = 'https://carlosgalera-a11y.github.io/casa/';
+  const previo = `<base href="${APP}"><style>#salir{display:none!important}</style><scr` + `ipt>window.__casaIncrustada=true;document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a[href^="#"]');if(a){e.preventDefault();location.hash=a.getAttribute('href');}},true);</scr` + `ipt>`;
+  try {
+    const r = await fetch(APP, { cache: 'no-cache' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const html = (await r.text()).replace(/<head([^>]*)>/i, (m) => m + previo);
+    document.open(); document.write(html); document.close();
+  } catch (e) {
+    document.getElementById('aviso').innerHTML = 'No se ha podido cargar el panel. <a href="' + APP + '" target="_top">Ábrelo aquí</a>.';
+  }
+})();
+</script>
+</body>
+</html>
