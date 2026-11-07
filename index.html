@@ -92,7 +92,7 @@
 const SUPA_URL = 'https://igvadjgjpyuvzailjqwg.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlndmFkamdqcHl1dnphaWxqcXdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NDI3MTAsImV4cCI6MjA4ODAxODcxMH0.eAqKCHDzrkvMTseaBP0I_JICP1owX60-cp3agYqRz4Q';
 const DEFAULT_REPO = 'carlosgalera-a11y/filehub2026';
-const APP_VERSION = 27; // mantener igual que CACHE en sw.js (workspace-vNN)
+const APP_VERSION = 28; // mantener igual que CACHE en sw.js (workspace-vNN)
 // URL propia (dinámica): funciona en github.io/workspace/ Y en el dominio propio.
 const APP_URL = (typeof location !== 'undefined' && location.origin) ? (location.origin + location.pathname) : 'https://filehubworksplace.com/';
 const CAL_URL = 'https://carlosgalera-a11y.github.io/calendario.html';
@@ -130,7 +130,7 @@ const state = {
   gh: null, ghLoading: false, ghTab: 'commits',
   cal: { m: new Date().getMonth(), y: new Date().getFullYear() },
   sidebar: false, urlBar: true, uploading: false,
-  taskFilter: 'todas', taskDone: 'pendientes', tablaVer: 'pendientes',
+  taskFilter: 'todas', taskDone: 'pendientes', tablaVer: 'pendientes', encargo: null, encargados: {},
   refreshing: false, notifOpen: false,
 };
 const TEAM = [{email:'carlosgalera2roman@gmail.com',name:'Carlos'},{email:'raquelft87@gmail.com',name:'Raquel'}];
@@ -611,6 +611,28 @@ function colocaMiCalendario(){
 window.addEventListener('resize', colocaMiCalendario);
 window.addEventListener('scroll', colocaMiCalendario, true);
 
+/* Encargar una tarea a un agente de Hermes: va a agente_encargos y el PC la lanza en su tablero. */
+const AGENTES=[['coordinador','Coordinador (decide él a quién pasarlo)'],['casa','Casa y agenda'],['medikai','MedikAI'],['egstek','EGS TeK'],['egstrategy','EGStrategy'],['finanzas','Finanzas'],['herramientas-formacion','Herramientas Formación'],['empleo','Empleo']];
+const nombreAgente=(v)=>(AGENTES.find(a=>a[0]===v)||[v,v])[1].replace(/ \(.*\)$/,'');
+function tituloEncargo(id){
+  const e=state.encargados[id]; if(!e) return 'Encargar a un agente';
+  return nombreAgente(e.agente)+': '+(e.estado==='lanzado'?'encargo lanzado':e.estado==='error'?'no se pudo lanzar':'esperando al PC')+'. Toca para encargar otra vez.';
+}
+async function cargaEncargos(){
+  if(!isOwner()) return;
+  const { data }=await sb.from('agente_encargos').select('origen,agente,estado').like('origen','ws_task:%').order('created_at',{ascending:true}).limit(500);
+  const m={}; (data||[]).forEach(e=>{ m[String(e.origen).slice(8)]=e; });
+  state.encargados=m;
+}
+function filaEncargo(t){
+  return `<tr><td colspan="7" class="pb-3"><div class="rounded-xl border border-[#283449] bg-[#131b2e] p-3 flex flex-col gap-2">
+    <p class="text-xs font-semibold text-[#F8FAFC]">🤖 Encargar a un agente</p>
+    <select id="encAgente" aria-label="Agente" class="w-full rounded-lg bg-[#0b1326] border border-[#283449] text-sm text-[#F8FAFC] p-2">${AGENTES.map(([v,n])=>`<option value="${v}">${esc(n)}</option>`).join('')}</select>
+    <textarea id="encDetalle" rows="2" maxlength="3800" aria-label="Detalle" placeholder="Más detalle, si hace falta (opcional)" class="w-full rounded-lg bg-[#0b1326] border border-[#283449] text-sm text-[#F8FAFC] p-2"></textarea>
+    <div class="flex justify-end gap-2"><button data-act="enc-cerrar" class="px-3 py-1.5 rounded-lg text-xs text-[#94A3B8] border border-[#283449]">Cancelar</button><button data-act="enc-enviar" data-id="${esc(t.id)}" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#8083ff] text-white">Encargar</button></div>
+  </div></td></tr>`;
+}
+
 function tablaProyectos(){
   const ver=state.tablaVer||'pendientes';
   const ESTADO={ pendiente:['Pendiente','bg-[#64748b]/20 text-[#94A3B8]'], en_curso:['En curso','bg-[#8083ff]/20 text-[#c0c1ff]'], hecho:['Hecho','bg-[#4edea3]/15 text-[#4edea3]'] };
@@ -625,8 +647,9 @@ function tablaProyectos(){
       <td class="py-2 pr-3">${chip(ESTADO[taskStage(t)])}</td>
       <td class="py-2 pr-3 text-xs text-[#94A3B8] whitespace-nowrap">${esc(who)}</td>
       <td class="py-2 pr-3">${db?chip([db[0]+(t.due_time?' '+t.due_time:''),db[1]]):'<span class="text-xs text-[#64748b]">—</span>'}</td>
-      <td class="py-2">${chip(PRIOB[t.priority||'medium']||PRIOB.medium)}</td>
-    </tr>`;
+      <td class="py-2 pr-2">${chip(PRIOB[t.priority||'medium']||PRIOB.medium)}</td>
+      ${isOwner()?`<td class="py-2 text-right"><button data-act="enc-abrir" data-id="${esc(t.id)}" title="${esc(tituloEncargo(t.id))}" aria-label="Encargar a un agente" class="text-sm ${state.encargados[t.id]?'opacity-50':''}">🤖</button></td>`:''}
+    </tr>${state.encargo===t.id?filaEncargo(t):''}`;
   };
   const sinProyecto=state.tasks.filter(t=>!proj(t.category));
   const grupos=state.projects.map(p=>({p,todas:projTasks(p.id)})).concat(sinProyecto.length?[{p:null,todas:sinProyecto}]:[]);
@@ -635,14 +658,14 @@ function tablaProyectos(){
     if(!ts.length) return '';
     const hechas=todas.filter(t=>t.completed).length;
     const nombre=p?`<button data-act="proj" data-id="${esc(p.id)}" class="font-headline font-bold text-sm text-[#c0c1ff] hover:underline">${esc(p.name)}</button>`:'<span class="font-headline font-bold text-sm text-[#94A3B8]">Sin proyecto</span>';
-    return `<tr><td colspan="6" class="pt-5 pb-1.5">${nombre} <span class="text-[10px] text-[#64748b] ml-1">${hechas}/${todas.length} hechas</span></td></tr>${ts.map(fila).join('')}`;
+    return `<tr><td colspan="7" class="pt-5 pb-1.5">${nombre} <span class="text-[10px] text-[#64748b] ml-1">${hechas}/${todas.length} hechas</span></td></tr>${ts.map(fila).join('')}`;
   }).join('');
   const ch=(id,label)=>`<button data-act="tabla-ver" data-id="${id}" class="px-3 py-1.5 rounded-full text-xs font-semibold ${ver===id?'bg-[#4edea3]/20 text-[#4edea3] border border-[#4edea3]/40':'text-[#94A3B8] border border-[#283449]'}">${label}</button>`;
   return `<div class="fh-rise">
     <div class="flex items-center gap-2 flex-wrap mb-3">${cambioDeVista('tabla')}<span class="ml-auto flex gap-2">${ch('pendientes','Pendientes')}${ch('todas','Todas')}</span></div>
     <div class="fh-card rounded-2xl p-4 overflow-x-auto">
       ${cuerpo?`<table class="w-full text-left" style="border-collapse:collapse;min-width:620px">
-        <thead><tr class="text-[10px] uppercase tracking-wider text-[#64748b]"><th class="pb-1"></th><th class="pb-1 font-semibold">Tarea</th><th class="pb-1 font-semibold">Estado</th><th class="pb-1 font-semibold">Quién</th><th class="pb-1 font-semibold">Fecha</th><th class="pb-1 font-semibold">Prioridad</th></tr></thead>
+        <thead><tr class="text-[10px] uppercase tracking-wider text-[#64748b]"><th class="pb-1"></th><th class="pb-1 font-semibold">Tarea</th><th class="pb-1 font-semibold">Estado</th><th class="pb-1 font-semibold">Quién</th><th class="pb-1 font-semibold">Fecha</th><th class="pb-1 font-semibold">Prioridad</th>${isOwner()?'<th class="pb-1"></th>':''}</tr></thead>
         <tbody>${cuerpo}</tbody></table>`:'<p class="text-sm text-[#64748b] text-center py-6">No hay tareas que mostrar.</p>'}
     </div>
   </div>`;
@@ -1665,7 +1688,7 @@ async function manejarClick(a, id, el, e){
   if (a==='welcome-close'){ try{localStorage.setItem('ws_welcome_seen','1');}catch(_){} render(); return; }
   if (a==='notif-toggle'){ state.notifOpen=!state.notifOpen; render(); return; }
   if (a==='notif-close'){ state.notifOpen=false; render(); return; }
-  if (a==='sec'){ state.section=id; if(id==='micalendario'||id==='tabla') state.selectedProject=null; state.sidebar=false; state.notifOpen=false; render(); if(state.section==='avances'&&!state.gh) loadGithub(); return; }
+  if (a==='sec'){ state.section=id; if(id==='micalendario'||id==='tabla') state.selectedProject=null; if(id==='tabla') cargaEncargos().then(render).catch(()=>{}); state.sidebar=false; state.notifOpen=false; render(); if(state.section==='avances'&&!state.gh) loadGithub(); return; }
   if (a==='proj'){ state.selectedProject=id||null; state.section='overview'; state.sidebar=false; state.notifOpen=false; if(state.gh){state.gh=null;} try{ history.replaceState(null,'', id?'#'+id:location.pathname); }catch(_){} render(); return; }
   if (a==='new-proj'){ await addProject(); return; }
   if (a==='del-proj'){ await deleteProject(id); return; }
@@ -1713,6 +1736,20 @@ async function manejarClick(a, id, el, e){
   if (a==='pac-del'){ await pacBorrar(id); return; }
   if (a==='tdone'){ state.taskDone=id; render(); return; }
   if (a==='tabla-ver'){ state.tablaVer=id; render(); return; }
+  if (a==='enc-abrir'){ state.encargo=id; render(); return; }
+  if (a==='enc-cerrar'){ state.encargo=null; render(); return; }
+  if (a==='enc-enviar'){
+    const t=state.tasks.find(x=>x.id===id); if(!t) return;
+    const agente=document.getElementById('encAgente').value;
+    const texto=document.getElementById('encDetalle').value.trim();
+    const pn=(proj(t.category)||{}).name;
+    const detalle=[texto,pn?'Proyecto: '+pn:'',t.dueDate?'Fecha: '+String(t.dueDate).slice(0,10):''].filter(Boolean).join('\n\n');
+    const { error }=await sb.from('agente_encargos').insert({ agente, titulo:String(t.title).slice(0,300), detalle:detalle||null, origen:'ws_task:'+id });
+    if(error){ alert('No se pudo encargar: '+error.message); return; }
+    state.encargo=null; state.encargados[id]={ agente, estado:'pendiente' }; render();
+    toast('🤖 Encargado a '+nombreAgente(agente)+'. El PC lo lanza en un par de minutos.');
+    return;
+  }
   if (a==='stage'){ await setStage(id, el.dataset.stage); return; }
   if (a==='add-mtg'){ await addMeeting(id); return; }
   if (a==='add-mtg-global'){ await addMeetingGlobal(); return; }
