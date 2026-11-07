@@ -92,7 +92,7 @@
 const SUPA_URL = 'https://igvadjgjpyuvzailjqwg.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlndmFkamdqcHl1dnphaWxqcXdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NDI3MTAsImV4cCI6MjA4ODAxODcxMH0.eAqKCHDzrkvMTseaBP0I_JICP1owX60-cp3agYqRz4Q';
 const DEFAULT_REPO = 'carlosgalera-a11y/filehub2026';
-const APP_VERSION = 26; // mantener igual que CACHE en sw.js (workspace-vNN)
+const APP_VERSION = 27; // mantener igual que CACHE en sw.js (workspace-vNN)
 // URL propia (dinámica): funciona en github.io/workspace/ Y en el dominio propio.
 const APP_URL = (typeof location !== 'undefined' && location.origin) ? (location.origin + location.pathname) : 'https://filehubworksplace.com/';
 const CAL_URL = 'https://carlosgalera-a11y.github.io/calendario.html';
@@ -130,7 +130,7 @@ const state = {
   gh: null, ghLoading: false, ghTab: 'commits',
   cal: { m: new Date().getMonth(), y: new Date().getFullYear() },
   sidebar: false, urlBar: true, uploading: false,
-  taskFilter: 'todas', taskDone: 'pendientes',
+  taskFilter: 'todas', taskDone: 'pendientes', tablaVer: 'pendientes',
   refreshing: false, notifOpen: false,
 };
 const TEAM = [{email:'carlosgalera2roman@gmail.com',name:'Carlos'},{email:'raquelft87@gmail.com',name:'Raquel'}];
@@ -398,6 +398,7 @@ function render() {
     ${state.notifOpen?`<div data-act="notif-close" class="fixed inset-0 z-20"></div>`:''}`;
   // el chat siempre abajo del todo (último mensaje visible)
   try{ const _cs=document.getElementById('chat-scroll'); if(_cs) _cs.scrollTop=_cs.scrollHeight; }catch(_){}
+  colocaMiCalendario();
 }
 async function refreshData(){
   if(!state.user||state.refreshing) return;
@@ -463,15 +464,16 @@ function sidebar() {
         ${sItem('plan','Plan semanal','📆',state.tasks.filter(t=>!t.completed&&t.assignee===me()&&String(t.dueDate||'').slice(0,10)===isoDate(new Date())).length)}
         ${sItem('avances','Avances','🌿',0)}
         ${sItem('reuniones','Reuniones','📅',0)}
+        ${isOwner()?sItem('micalendario','Mi calendario','🩺',0):''}
         ${sItem('calendario','Calendario','🗓️',0)}
         ${sItem('pendientes','Quién tiene qué','👥',pending)}
         ${isOwner()?sItem('pacientes','Agenda pacientes','🩺',pacPendientesTotal()+state.dudas.filter(d=>!d.resuelta).length):''}
         ${sItem('tareas','Tareas','✅',0)}
+        ${sItem('tabla','Tareas por proyecto','🗂️',0)}
         ${sItem('archivos','Archivos','📁',0)}
       </div>
       <div class="mb-5">
         <p class="text-[10px] font-semibold text-[#64748b] uppercase tracking-wider mb-2 px-2">Enlaces</p>
-        <a href="${CAL_URL}" target="_blank" rel="noopener" class="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-[#94A3B8] hover:bg-[#1c2436] mt-0.5"><span class="w-4 text-center">📅</span><span>Mi calendario</span></a>
         <a href="${FILEHUB_URL}" class="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-[#94A3B8] hover:bg-[#1c2436] mt-0.5"><span class="w-4 text-center">⚡</span><span>FileHub</span></a>
       </div>
       <div class="mt-6 flex items-center gap-2 px-2 py-2 rounded-lg bg-[#131b2e] border border-[#283449]">
@@ -503,7 +505,7 @@ function notifPanel(){
   return `<div class="absolute right-0 mt-2 w-72 max-h-[70vh] overflow-auto fh-card rounded-2xl z-50 py-1" style="box-shadow:0 12px 40px rgba(0,0,0,.5)"><div class="flex items-center justify-between px-3 py-2 border-b border-[#283449]"><span class="text-sm font-headline font-bold">Notificaciones</span><button data-act="notif-toggle" class="text-[#64748b] hover:text-[#F8FAFC]">✕</button></div>${body}</div>`;
 }
 function topbar() {
-  const label = { overview:'Panel general', plan:'Plan semanal', reuniones:'Reuniones', avances:'Avances', calendario:'Calendario', pendientes:'Quién tiene qué', pacientes:'Agenda pacientes', tareas:'Tareas', archivos:'Archivos' }[state.section];
+  const label = { overview:'Panel general', plan:'Plan semanal', reuniones:'Reuniones', avances:'Avances', micalendario:'Mi calendario', tabla:'Tareas por proyecto', calendario:'Calendario', pendientes:'Quién tiene qué', pacientes:'Agenda pacientes', tareas:'Tareas', archivos:'Archivos' }[state.section];
   const p = state.selectedProject ? proj(state.selectedProject) : null;
   const title = p ? p.name : label;
   const nCount = myNotifs().count;
@@ -564,6 +566,8 @@ function mainContent() {
   if (state.section==='overview') return state.selectedProject ? projectDashboard(proj(state.selectedProject)) : overview();
   if (state.section==='reuniones') return reunionesGlobal();
   if (state.section==='avances') return avances();
+  if (state.section==='micalendario') return isOwner() ? miCalendario() : '';
+  if (state.section==='tabla') return tablaProyectos();
   if (state.section==='calendario') return `<div class="fh-card rounded-2xl p-5 fh-rise">${calendar()}</div>`;
   if (state.section==='plan') return planView();
   if (state.section==='pendientes') return pendientes();
@@ -571,6 +575,77 @@ function mainContent() {
   if (state.section==='tareas') return `<div class="fh-card rounded-2xl p-5 fh-rise">${tareas()}</div>`;
   if (state.section==='archivos') return `<div class="fh-card rounded-2xl p-5 fh-rise">${archivos()}</div>`;
   return '';
+}
+
+/* ══ Mi calendario y tareas por proyecto ══
+   mi-calendario.html carga el calendario de FileHub dentro de este origen, así comparte la sesión de
+   Supabase. El iframe vive fuera de #app porque render() repinta todo con innerHTML y lo recargaría
+   cada vez: solo se recoloca encima de su hueco. */
+function cambioDeVista(activa){
+  if (!isOwner()) return '';
+  const b=(id,label)=>`<button data-act="sec" data-id="${id}" class="px-3 py-1.5 rounded-full text-xs font-semibold ${activa===id?'bg-[#8083ff]/20 text-[#c0c1ff] border border-[#8083ff]/40':'text-[#94A3B8] border border-[#283449]'}">${label}</button>`;
+  return `${b('micalendario','🩺 Mi calendario')}${b('tabla','🗂️ Tareas por proyecto')}`;
+}
+function miCalendario(){
+  return `<div>
+    <div class="flex items-center gap-2 flex-wrap mb-3">${cambioDeVista('micalendario')}
+      <a href="https://arditifilehub.com/calendario.html" target="_blank" rel="noopener" class="ml-auto text-[11px] text-[#8083ff] underline">Abrir aparte</a>
+    </div>
+    <div id="miCalHueco" class="rounded-2xl" style="height:70vh"></div>
+  </div>`;
+}
+function colocaMiCalendario(){
+  const hueco=document.getElementById('miCalHueco');
+  let f=document.getElementById('miCalFrame');
+  if(!hueco){ if(f) f.style.display='none'; return; }
+  if(!f){
+    f=document.createElement('iframe');
+    f.id='miCalFrame'; f.title='Mi calendario'; f.src='./mi-calendario.html';
+    f.style.cssText='position:fixed;border:0;border-radius:16px;z-index:10;background:#0b1326';
+    document.body.appendChild(f);
+  }
+  hueco.style.height=Math.max(360, window.innerHeight-hueco.getBoundingClientRect().top-16)+'px';
+  const r=hueco.getBoundingClientRect();
+  f.style.display='block'; f.style.left=r.left+'px'; f.style.top=r.top+'px'; f.style.width=r.width+'px'; f.style.height=r.height+'px';
+}
+window.addEventListener('resize', colocaMiCalendario);
+window.addEventListener('scroll', colocaMiCalendario, true);
+
+function tablaProyectos(){
+  const ver=state.tablaVer||'pendientes';
+  const ESTADO={ pendiente:['Pendiente','bg-[#64748b]/20 text-[#94A3B8]'], en_curso:['En curso','bg-[#8083ff]/20 text-[#c0c1ff]'], hecho:['Hecho','bg-[#4edea3]/15 text-[#4edea3]'] };
+  const chip=(par)=>`<span class="text-[10px] px-2 py-0.5 rounded-full whitespace-nowrap ${par[1]}">${esc(par[0])}</span>`;
+  const orden=(a,b)=>(taskStage(b)==='en_curso')-(taskStage(a)==='en_curso') || String(a.dueDate||'9999').localeCompare(String(b.dueDate||'9999'));
+  const fila=(t)=>{
+    const db=dateBadge(t.dueDate);
+    const who=t.assignee?(TEAM_NAME[t.assignee]||String(t.assignee).split('@')[0]):'—';
+    return `<tr class="border-t border-[#283449] ${t.completed?'opacity-60':''}">
+      <td class="py-2 pr-2 align-top"><button data-act="toggle-task" data-id="${esc(t.id)}" aria-label="Marcar hecha" class="w-5 h-5 rounded-md border flex items-center justify-center ${t.completed?'bg-[#4edea3] border-[#4edea3]':'border-[#334155]'}">${t.completed?'<span class="text-[#0b1326] text-xs">✓</span>':''}</button></td>
+      <td class="py-2 pr-3 text-sm text-[#F8FAFC] ${t.completed?'line-through':''}" style="min-width:220px">${esc(t.title)}</td>
+      <td class="py-2 pr-3">${chip(ESTADO[taskStage(t)])}</td>
+      <td class="py-2 pr-3 text-xs text-[#94A3B8] whitespace-nowrap">${esc(who)}</td>
+      <td class="py-2 pr-3">${db?chip([db[0]+(t.due_time?' '+t.due_time:''),db[1]]):'<span class="text-xs text-[#64748b]">—</span>'}</td>
+      <td class="py-2">${chip(PRIOB[t.priority||'medium']||PRIOB.medium)}</td>
+    </tr>`;
+  };
+  const sinProyecto=state.tasks.filter(t=>!proj(t.category));
+  const grupos=state.projects.map(p=>({p,todas:projTasks(p.id)})).concat(sinProyecto.length?[{p:null,todas:sinProyecto}]:[]);
+  const cuerpo=grupos.map(({p,todas})=>{
+    const ts=(ver==='pendientes'?todas.filter(t=>!t.completed):todas).slice().sort(orden);
+    if(!ts.length) return '';
+    const hechas=todas.filter(t=>t.completed).length;
+    const nombre=p?`<button data-act="proj" data-id="${esc(p.id)}" class="font-headline font-bold text-sm text-[#c0c1ff] hover:underline">${esc(p.name)}</button>`:'<span class="font-headline font-bold text-sm text-[#94A3B8]">Sin proyecto</span>';
+    return `<tr><td colspan="6" class="pt-5 pb-1.5">${nombre} <span class="text-[10px] text-[#64748b] ml-1">${hechas}/${todas.length} hechas</span></td></tr>${ts.map(fila).join('')}`;
+  }).join('');
+  const ch=(id,label)=>`<button data-act="tabla-ver" data-id="${id}" class="px-3 py-1.5 rounded-full text-xs font-semibold ${ver===id?'bg-[#4edea3]/20 text-[#4edea3] border border-[#4edea3]/40':'text-[#94A3B8] border border-[#283449]'}">${label}</button>`;
+  return `<div class="fh-rise">
+    <div class="flex items-center gap-2 flex-wrap mb-3">${cambioDeVista('tabla')}<span class="ml-auto flex gap-2">${ch('pendientes','Pendientes')}${ch('todas','Todas')}</span></div>
+    <div class="fh-card rounded-2xl p-4 overflow-x-auto">
+      ${cuerpo?`<table class="w-full text-left" style="border-collapse:collapse;min-width:620px">
+        <thead><tr class="text-[10px] uppercase tracking-wider text-[#64748b]"><th class="pb-1"></th><th class="pb-1 font-semibold">Tarea</th><th class="pb-1 font-semibold">Estado</th><th class="pb-1 font-semibold">Quién</th><th class="pb-1 font-semibold">Fecha</th><th class="pb-1 font-semibold">Prioridad</th></tr></thead>
+        <tbody>${cuerpo}</tbody></table>`:'<p class="text-sm text-[#64748b] text-center py-6">No hay tareas que mostrar.</p>'}
+    </div>
+  </div>`;
 }
 
 function overview() {
@@ -1590,7 +1665,7 @@ async function manejarClick(a, id, el, e){
   if (a==='welcome-close'){ try{localStorage.setItem('ws_welcome_seen','1');}catch(_){} render(); return; }
   if (a==='notif-toggle'){ state.notifOpen=!state.notifOpen; render(); return; }
   if (a==='notif-close'){ state.notifOpen=false; render(); return; }
-  if (a==='sec'){ state.section=id; state.sidebar=false; state.notifOpen=false; render(); if(state.section==='avances'&&!state.gh) loadGithub(); return; }
+  if (a==='sec'){ state.section=id; if(id==='micalendario'||id==='tabla') state.selectedProject=null; state.sidebar=false; state.notifOpen=false; render(); if(state.section==='avances'&&!state.gh) loadGithub(); return; }
   if (a==='proj'){ state.selectedProject=id||null; state.section='overview'; state.sidebar=false; state.notifOpen=false; if(state.gh){state.gh=null;} try{ history.replaceState(null,'', id?'#'+id:location.pathname); }catch(_){} render(); return; }
   if (a==='new-proj'){ await addProject(); return; }
   if (a==='del-proj'){ await deleteProject(id); return; }
@@ -1637,6 +1712,7 @@ async function manejarClick(a, id, el, e){
   if (a==='pac-archivar'){ const p=pacById(id); if(p) await pacGuardar(p,{ archivado:!p.archivado }); return; }
   if (a==='pac-del'){ await pacBorrar(id); return; }
   if (a==='tdone'){ state.taskDone=id; render(); return; }
+  if (a==='tabla-ver'){ state.tablaVer=id; render(); return; }
   if (a==='stage'){ await setStage(id, el.dataset.stage); return; }
   if (a==='add-mtg'){ await addMeeting(id); return; }
   if (a==='add-mtg-global'){ await addMeetingGlobal(); return; }
