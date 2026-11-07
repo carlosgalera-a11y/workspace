@@ -92,7 +92,7 @@
 const SUPA_URL = 'https://igvadjgjpyuvzailjqwg.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlndmFkamdqcHl1dnphaWxqcXdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NDI3MTAsImV4cCI6MjA4ODAxODcxMH0.eAqKCHDzrkvMTseaBP0I_JICP1owX60-cp3agYqRz4Q';
 const DEFAULT_REPO = 'carlosgalera-a11y/filehub2026';
-const APP_VERSION = 29; // mantener igual que CACHE en sw.js (workspace-vNN)
+const APP_VERSION = 30; // mantener igual que CACHE en sw.js (workspace-vNN)
 // URL propia (dinámica): funciona en github.io/workspace/ Y en el dominio propio.
 const APP_URL = (typeof location !== 'undefined' && location.origin) ? (location.origin + location.pathname) : 'https://filehubworksplace.com/';
 const CAL_URL = 'https://carlosgalera-a11y.github.io/calendario.html';
@@ -471,6 +471,7 @@ function sidebar() {
         ${sItem('tareas','Tareas','✅',0)}
         ${sItem('tabla','Tareas por proyecto','🗂️',0)}
         ${isOwner()?sItem('gastos','Gastos del piso','💶',0):''}
+        ${isOwner()?sItem('casa','Casa','🏠',0):''}
         ${sItem('archivos','Archivos','📁',0)}
       </div>
       <div class="mb-5">
@@ -506,7 +507,7 @@ function notifPanel(){
   return `<div class="absolute right-0 mt-2 w-72 max-h-[70vh] overflow-auto fh-card rounded-2xl z-50 py-1" style="box-shadow:0 12px 40px rgba(0,0,0,.5)"><div class="flex items-center justify-between px-3 py-2 border-b border-[#283449]"><span class="text-sm font-headline font-bold">Notificaciones</span><button data-act="notif-toggle" class="text-[#64748b] hover:text-[#F8FAFC]">✕</button></div>${body}</div>`;
 }
 function topbar() {
-  const label = { overview:'Panel general', plan:'Plan semanal', reuniones:'Reuniones', avances:'Avances', micalendario:'Mi calendario', tabla:'Tareas por proyecto', gastos:'Gastos del piso', calendario:'Calendario', pendientes:'Quién tiene qué', pacientes:'Agenda pacientes', tareas:'Tareas', archivos:'Archivos' }[state.section];
+  const label = { overview:'Panel general', plan:'Plan semanal', reuniones:'Reuniones', avances:'Avances', micalendario:'Mi calendario', tabla:'Tareas por proyecto', gastos:'Gastos del piso', casa:'Casa', calendario:'Calendario', pendientes:'Quién tiene qué', pacientes:'Agenda pacientes', tareas:'Tareas', archivos:'Archivos' }[state.section];
   const p = state.selectedProject ? proj(state.selectedProject) : null;
   const title = p ? p.name : label;
   const nCount = myNotifs().count;
@@ -585,11 +586,12 @@ function mainContent() {
 const INCRUSTADAS={
   micalendario:{ id:'miCalFrame', titulo:'Mi calendario', src:'./mi-calendario.html', aparte:'https://arditifilehub.com/calendario.html' },
   gastos:{ id:'gastosFrame', titulo:'Gastos del piso', src:'./mi-gastos.html', aparte:'https://carlosgalera-a11y.github.io/gastos/' },
+  casa:{ id:'casaFrame', titulo:'Casa', src:'./mi-casa.html', aparte:'https://carlosgalera-a11y.github.io/casa/' },
 };
 function cambioDeVista(activa){
   if (!isOwner()) return '';
   const b=(id,label)=>`<button data-act="sec" data-id="${id}" class="px-3 py-1.5 rounded-full text-xs font-semibold ${activa===id?'bg-[#8083ff]/20 text-[#c0c1ff] border border-[#8083ff]/40':'text-[#94A3B8] border border-[#283449]'}">${label}</button>`;
-  return `${b('micalendario','🩺 Mi calendario')}${b('tabla','🗂️ Tareas por proyecto')}${b('gastos','💶 Gastos')}`;
+  return `${b('micalendario','🩺 Mi calendario')}${b('tabla','🗂️ Tareas por proyecto')}${b('gastos','💶 Gastos')}${b('casa','🏠 Casa')}`;
 }
 function vistaIncrustada(sec){
   return `<div>
